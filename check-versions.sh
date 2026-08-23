@@ -68,6 +68,9 @@ for schema in *.schema.json; do
     esac
 done
 
+check "plugins/new/bin/install-archival.sh inferred" \
+    "$(ARCHIVAL_VERSION= plugins/new/bin/install-archival.sh --print-version)"
+
 if [ $FAILED -ne 0 ]; then
     exit 1
 fi

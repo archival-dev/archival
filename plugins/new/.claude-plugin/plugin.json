@@ -1,0 +1,12 @@
+{
+  "name": "new",
+  "description": "Build a new Archival website from a short conversation: interviews you about the site you want, authors it with the archival CLI, and publishes it to a shareable preview URL.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Archival",
+    "url": "https://archival.dev"
+  },
+  "homepage": "https://archival.dev",
+  "repository": "https://github.com/jesseditson/archival",
+  "license": "AGPL-3.0-or-later"
+}

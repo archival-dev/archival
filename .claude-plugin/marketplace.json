@@ -1,0 +1,15 @@
+{
+  "name": "archival",
+  "description": "Official plugins for Archival, the database-free CMS for content-oriented websites.",
+  "owner": {
+    "name": "Archival",
+    "url": "https://archival.dev"
+  },
+  "plugins": [
+    {
+      "name": "new",
+      "source": "./plugins/new",
+      "description": "Build a new Archival website from a short conversation and publish it to a preview URL."
+    }
+  ]
+}
