@@ -16,7 +16,7 @@ inputs:
       Override the archival version to use from cargo. If archival-bin is
       specified, this does nothing.
     required: false
-    default: "0.20.1"
+    default: "0.20.2"
   api-host:
     description: "API Host to send build events to"
     required: false

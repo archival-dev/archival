@@ -119,7 +119,7 @@ dependencies = [
 
 [[package]]
 name = "archival"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "anyhow",
  "assertables",
