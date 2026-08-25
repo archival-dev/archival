@@ -24,10 +24,32 @@ no link yet has been failed, however good the thing you are still writing is.
 
 ## 1. Get a session
 
-The `archival_*` tools do all of this.
+**Check the `archival_*` tools are there before anything else.** If they are
+not, say so plainly and stop rather than improvising a way around it. In a Claude
+conversation the tools arrive as a connector, so give the person the link and
+the URL together:
 
-A request launched from archival.dev carries a **session** in the prompt — use
-it as-is and skip to step 2. Otherwise:
+> Add the Archival connector at
+> <https://claude.ai/customize/connectors?modal=add-custom-connector&connectorName=Archival&connectorUrl=https%3A%2F%2Fapi.archival.dev%2Fmcp>,
+> then start a new chat.
+
+That is an install link: it opens the dialog with the name and URL already in
+it, so all they do is confirm. Give it whole — a shortened or retyped version
+loses the prefill. If they would rather add it by hand, the server URL is
+`https://api.archival.dev/mcp`. A connector added partway through does not
+appear in the conversation already running, which is why the new chat is not
+optional.
+
+`reference/publishing.md` is the same flow over plain HTTP, but it only helps
+where the shell you are in can actually reach `api.archival.dev`. A local
+terminal can. A claude.ai sandbox and a Claude Code cloud session cannot — both
+answer `403` with `x-deny-reason: host_not_allowed`, and nothing you can do from
+inside changes that. If curl comes back with that, the connector is the only way
+forward: say so and stop, rather than writing a site nobody can publish.
+
+With the tools in hand, they do the rest of this on their own. A request
+launched from archival.dev carries a **session** in the prompt — use it as-is
+and skip to step 2. Otherwise:
 
 1. `archival_start_session`, with a short `slug` for the site if you already
    know one. It returns a link and a code.
@@ -47,14 +69,6 @@ round trip and leaves you with nothing to show. If it has expired, mint another
 and say so in one line. Never invent a session or a preview name.
 
 The session lasts two hours once approved.
-
-If the `archival_*` tools are not there, say so plainly rather than improvising.
-In a Claude conversation they arrive as a connector: ask the person to add
-`https://api.archival.dev/mcp` as a custom connector under Settings →
-Connectors, then start a new chat — a connector added partway through does not
-appear in the conversation already running. Where you have a shell instead,
-`reference/publishing.md` is the same flow over plain HTTP and needs nothing
-added.
 
 ## 2. Say what Archival is, in two sentences
 
