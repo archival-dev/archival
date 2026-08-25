@@ -18,8 +18,7 @@ written straight into the preview and built on Archival's side.
 
 ## 1. Get a session
 
-The `archival_*` tools do all of this. If they are not connected, use
-`reference/publishing.md`, which is the same flow over plain HTTP.
+The `archival_*` tools do all of this.
 
 A request launched from archival.dev carries a **session** in the prompt — use
 it as-is and skip to step 2. Otherwise:
@@ -36,11 +35,13 @@ Do something useful while you wait — ask them about the site rather than
 watching a spinner. The link expires in ten minutes and the session lasts two
 hours. Never invent a session or a preview name.
 
-If the tools are unreachable, say so plainly and offer to start again locally:
-install Claude Code, open a terminal, and paste the same prompt. A Claude Code
-cloud session does not allow `api.archival.dev` by default, and the policy is
-fixed when the session starts — nothing in here can change it. It can be added
-at <https://claude.ai/code> for a new session.
+If the `archival_*` tools are not there, say so plainly rather than improvising.
+In a Claude conversation they arrive as a connector: ask the person to add
+`https://api.archival.dev/mcp` as a custom connector under Settings →
+Connectors, then start a new chat — a connector added partway through does not
+appear in the conversation already running. Where you have a shell instead,
+`reference/publishing.md` is the same flow over plain HTTP and needs nothing
+added.
 
 ## 2. Say what Archival is, in two sentences
 
@@ -117,6 +118,10 @@ and it has changed.
 
 Write the files with `archival_write_files`, which takes a batch. Read one back
 with `archival_read_file`, remove one with `archival_delete_files`.
+
+None of this belongs on the machine you are running on. If you do write files
+there — a copy to run the CLI against, notes to yourself — make a new directory
+for them rather than working wherever the session happened to open.
 
 Images and other media do not go in the source. `archival_upload_media` puts
 them on the CDN and hands back the `sha`, `filename`, `mime` and `display_type`
