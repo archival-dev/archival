@@ -110,8 +110,12 @@ Every page in `pages/` becomes an HTML file: `pages/index.liquid` →
 ### Built-in variables
 
 - `objects` — every type, keyed by name.
-- **Pluralized accessors** — a list type is exposed pluralized (`post` → `posts`);
-  a root object keeps its name (`home` → `home`).
+- **Inflected accessors** — the accessor is the type name run through an
+  inflector: a list is **pluralized** (`post` → `posts`), a root object is
+  **singularized** (`settings` → `setting`, `home` → `home`). A name that is
+  already the right number comes back unchanged, which is what makes this easy
+  to miss. `objects.<name>` always takes the name exactly as written, and is the
+  way out when an inflection surprises you.
 - `site_url` — from `archival.toml`.
 - `page` — the name of the page being rendered.
 
@@ -166,6 +170,11 @@ local.
 
 ## Gotchas that cost real time
 
+- **A plural root object is not addressable by its own name.** `[settings]` in
+  the schema is `setting` in a template, so `{{ settings.title }}` fails the
+  build as an unknown variable. Name root object types in the singular — `site`,
+  `home`, `about` — and lists in the singular too, since they pluralize
+  themselves.
 - **`site_name` is not a template variable.** `archival.toml` takes both
   `site_name` and `site_url`, but only `site_url` is exposed to templates.
   Referencing `site_name` fails the build with `liquid: failed to evaluate

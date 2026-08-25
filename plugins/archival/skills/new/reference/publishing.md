@@ -41,7 +41,8 @@ curl -sS -H "$AUTH" "$API/previews/self-serve/status"
 ```json
 {
   "name": "blue-fig-bakery-a1b2c3d4",
-  "url": "https://blue-fig-bakery-a1b2c3d4.preview.onarchival.dev",
+  "url": "https://editor.archival.dev/preview?n=blue-fig-bakery-a1b2c3d4",
+  "siteUrl": "https://blue-fig-bakery-a1b2c3d4.preview.onarchival.dev",
   "published": false,
   "publishes": 0,
   "publishesRemaining": 20,
@@ -134,11 +135,17 @@ curl -sS -f -X POST -H "$AUTH" "$API/previews/self-serve/build"
 
 ```json
 {
-  "url": "https://blue-fig-bakery-a1b2c3d4.preview.onarchival.dev",
+  "url": "https://editor.archival.dev/preview?n=blue-fig-bakery-a1b2c3d4",
+  "siteUrl": "https://blue-fig-bakery-a1b2c3d4.preview.onarchival.dev",
   "publishes": 1,
   "publishesRemaining": 19
 }
 ```
+
+`url` is the link to give the person, and the only one to give them: it frames
+the site with the notice and the path to claiming it. `siteUrl` is the raw
+origin the site is served from — use it to fetch a built page and check
+something, never to share.
 
 The server builds the source you uploaded with a pinned `archival` binary and
 serves the result. You do not need the CLI, and you do not upload `dist/`. A
@@ -179,10 +186,10 @@ are mistakes in the request: fix the path, the order, or get a fresh link.
 
 Say these plainly before the first publish:
 
-- The URL is **public**. Anyone with it can see the site.
+- The site is **public**. Anyone with the link can see it.
 - Every publish is **reported to Archival** for abuse review.
 - The preview **expires** if they do nothing with it.
-- To keep it, open the URL and choose to claim the site.
+- To keep it, open the link and choose to claim the site.
 
 Never publish content they did not ask for, and never publish a site containing
 invented facts about a real business or person.

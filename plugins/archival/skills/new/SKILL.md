@@ -16,6 +16,12 @@ words; make every technical decision yourself.
 You need no local checkout, no working directory and no toolchain. The site is
 written straight into the preview and built on Archival's side.
 
+**A live URL is the deliverable, and it comes early.** The whole shape is: get
+approved, ask one round of questions, publish something real within a few
+minutes, then improve it together while they watch. A session gets 20 publishes
+— they are there to be spent. Someone who has asked twice for a website and has
+no link yet has been failed, however good the thing you are still writing is.
+
 ## 1. Get a session
 
 The `archival_*` tools do all of this.
@@ -25,15 +31,22 @@ it as-is and skip to step 2. Otherwise:
 
 1. `archival_start_session`, with a short `slug` for the site if you already
    know one. It returns a link and a code.
-2. Show the person **both**, and ask them to check the code matches before
-   approving. That check is what stops a link someone else sent them from being
-   approved by mistake.
-3. Poll `archival_await_approval` every couple of seconds until it stops saying
-   `waiting`.
+2. Send **one** message: the link, the code, ask them to check the code matches
+   on the page before approving, and — in the same message — the questions from
+   step 3. That check is what stops a link someone else sent them from being
+   approved by mistake, and folding the questions in means the wait costs
+   nothing.
+3. Then stop and let them reply. Call `archival_await_approval` when they come
+   back, or once or twice if you have something to say meanwhile.
 
-Do something useful while you wait — ask them about the site rather than
-watching a spinner. The link expires in ten minutes and the session lasts two
-hours. Never invent a session or a preview name.
+The person is the blocker here, and nothing you can do removes them. Do not sit
+in a polling loop, and do not push the wait into a background task and carry on
+building: the link expires in ten minutes, and a link that lapses unwatched
+while you write a site against a session that was never approved costs a whole
+round trip and leaves you with nothing to show. If it has expired, mint another
+and say so in one line. Never invent a session or a preview name.
+
+The session lasts two hours once approved.
 
 If the `archival_*` tools are not there, say so plainly rather than improvising.
 In a Claude conversation they arrive as a connector: ask the person to add
@@ -63,6 +76,9 @@ do not know, say so and point them at <https://archival.dev/docs>, which they ca
 open even when you cannot.
 
 ## 3. Ask what goes on the site
+
+If you had to mint an approval link in step 1, all of this goes in that same
+message. There is no reason to spend a round trip on the link alone.
 
 Open with the question that matters most:
 
@@ -98,8 +114,10 @@ Three rules that matter more than they look:
 - **Start simple.** Two or three entry types and a clean single page beats an
   elaborate structure they did not ask for. They can see how it fits together,
   and adding a type later costs nothing.
+- **A vague answer is not a reason to ask again.** Build something, publish it,
+  and let them correct a real page.
 
-## 4. Write the site
+## 4. Write the smallest site that renders
 
 ```
 archival.toml             site config (site_name, site_url)
@@ -113,11 +131,20 @@ public/                   static files copied verbatim into the build
 **Read `archival_reference` with topic `authoring` before writing any of
 these.** It covers the object schema, field types, child fields, page templates,
 partials and layouts, and is the difference between a site that builds and one
-that does not. Do not write Archival syntax from memory — the format is specific
-and it has changed.
+that does not. Do not write Archival syntax from memory — the format is specific,
+it has changed, and it is not the Liquid any other generator uses. Its "Gotchas"
+section is the part that actually costs builds: accessor names are inflected, so
+a root object type called `settings` is `setting` in a template; `site_name` is
+not a variable; `layout/` is singular; `include` and `render` are not
+interchangeable.
 
 Write the files with `archival_write_files`, which takes a batch. Read one back
 with `archival_read_file`, remove one with `archival_delete_files`.
+
+Aim this first pass at a page that renders, not at a finished site: the object
+types, real content in them, one page that shows it, and a stylesheet you are
+not done with. Then publish. Everything after that — more pages, media, the
+design — goes faster against something they can already see.
 
 None of this belongs on the machine you are running on. If you do write files
 there — a copy to run the CLI against, notes to yourself — make a new directory
@@ -127,10 +154,34 @@ Images and other media do not go in the source. `archival_upload_media` puts
 them on the CDN and hands back the `sha`, `filename`, `mime` and `display_type`
 to write into the object file; archival builds the URL from those.
 
-## 5. Design it properly
+## 5. Publish, and give them the link
 
-The generator is not the interesting part; the site is. Aim for something they
-would be glad to send to a customer.
+`archival_publish` builds the site with Archival and puts it live. It is also the
+only check there is — nothing validates a template until this runs — so call it
+as soon as one page renders rather than at the end. A schema or template error
+fails here and comes back as archival's own diagnostic. Fix what it names and
+publish again. Never claim a site works without a successful publish.
+
+Say before the first publish that the site is public and that every publish is
+reviewed. Publish nothing they did not ask for.
+
+Then **give them the `url` it returned, on its own line.** Not buried in a
+summary of what you built — the link is the thing they have been waiting for,
+and a message about the site that does not contain it has not delivered
+anything. Share `url` and only `url`: the `siteUrl` beside it is the raw origin,
+and it strands whoever opens it with no way to keep the site.
+
+Republishing after edits is the loop, not an exception. Twenty publishes per
+session is enough to work in front of them: change something, publish, ask what
+they think of it.
+
+When they are happy, tell them they can keep the site by opening that link and
+claiming it.
+
+## 6. Then make it good
+
+Now that they can see it, make it something they would be glad to send to a
+customer. Work in passes, and publish each one.
 
 - Write real CSS in `public/`. Pick a deliberate type scale, a restrained
   palette, and generous spacing.
@@ -138,20 +189,6 @@ would be glad to send to a customer.
   every image, and text that passes contrast against its background.
 - Prefer few, well-made sections over many thin ones.
 - Set the page `<title>` and meta description for every page.
-
-## 6. Publish
-
-`archival_publish` builds the site with Archival and puts it live. It is the
-check that matters: a template or schema error fails here, and what comes back is
-archival's own diagnostic. Fix what it names and publish again. Never claim a
-site works without a successful publish.
-
-Say before the first publish that the URL is public and that every publish is
-reviewed. Publish nothing they did not ask for.
-
-Publish early and iterate on the live URL — that is the fastest feedback loop
-there is. When they are happy, give them the URL and tell them they can keep the
-site by opening it and claiming it.
 
 ### Optionally, a local preview
 
@@ -163,8 +200,9 @@ bash "${CLAUDE_PLUGIN_ROOT:-.}/bin/install-archival.sh"
 archival run <site dir>    # rebuilds on change, serves on http://localhost:1024
 ```
 
-This is a convenience, not a step. Publishing is what shows them the real thing,
-and it is the only thing that works in a cloud session.
+This is a convenience, not a step, and it needs a shell — in a chat there is
+none. Publishing is what shows them the real thing, and it is what they can
+actually open.
 
 ## Scope
 
