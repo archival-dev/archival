@@ -1,7 +1,7 @@
 {
   "name": "archival",
   "displayName": "Archival",
-  "description": "Build a new Archival website from a short conversation: interviews you about the site you want, authors it with the archival CLI, and publishes it to a shareable preview URL.",
+  "description": "Build a new Archival website from a short conversation: interviews you about the site you want, writes it, and publishes it to a shareable preview URL.",
   "version": "0.1.0",
   "author": {
     "name": "Archival",
@@ -9,5 +9,11 @@
   },
   "homepage": "https://archival.dev",
   "repository": "https://github.com/archival-dev/archival",
-  "license": "AGPL-3.0-or-later"
+  "license": "AGPL-3.0-or-later",
+  "mcpServers": {
+    "archival": {
+      "type": "http",
+      "url": "https://api.archival.dev/mcp"
+    }
+  }
 }

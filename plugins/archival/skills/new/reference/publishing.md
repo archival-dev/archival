@@ -1,7 +1,7 @@
-# Publishing a preview to archival.dev
+# Publishing a preview to archival.dev, without the MCP tools
 
-Three steps: upload the source, upload the built `dist/`, publish. Every request
-carries the publish token.
+This is the same flow the `archival_*` tools drive, over plain HTTP. Use it when
+the tools are not connected. If they are, use them — they do all of this.
 
 ```bash
 API=https://api.archival.dev
@@ -11,25 +11,26 @@ AUTH="Authorization: Bearer $ARCHIVAL_PUBLISH_TOKEN"
 The token names the preview. **You never send the preview name** — the server
 resolves it from the token, so a token cannot touch anyone else's site.
 
-## 0. No token? Pair for one
+## 0. Get a token
 
-Skip this if a token arrived with the request.
+Skip this if one arrived with the request.
 
 ```bash
 # 1. ask for a code
-curl -sS -X POST "$API/previews/self-serve/pair/start"
+curl -sS -X POST "$API/previews/self-serve/pair/start" \
+  -H 'Content-Type: application/json' -d '{"slug":"blue fig bakery"}'
 # -> { "code": "K7QM…", "verifyUrl": "https://archival.dev/link?c=K7QM…", "expiresIn": 600 }
 
 # 2. show the person the URL and the code, then poll until this stops being 204
 curl -sS -X POST -d "$CODE" "$API/previews/self-serve/pair/poll"
 ```
 
-`204` means keep waiting. `200` returns the same body as a launched request —
-token, preview name, uploads URL and prefix, archival version. `404` means the
-code expired or was already collected.
+`204` means keep waiting. `200` returns the token, preview name, uploads URL and
+prefix. `404` means the code expired or was already collected.
 
 The code is single-use, expires in ten minutes, and only a person clearing a
-challenge in a browser can approve it.
+challenge in a browser can approve it. The `slug` is optional and names the
+preview's subdomain.
 
 ## 1. Check what you have
 
@@ -52,25 +53,13 @@ curl -sS -H "$AUTH" "$API/previews/self-serve/status"
 Run this first. It confirms the token works before you spend time uploading, and
 an expired token is much clearer here than midway through a hundred files.
 
-## 2. Upload
+## 2. Upload the source
 
 One request per file, raw bytes in the body, path in the URL:
-
-```
-PUT /previews/self-serve/file/<kind>/<path>
-```
-
-`<kind>` is `source` for the site source and `dist` for the built output. Upload
-**both**:
-
-- **`dist`** is what gets served. Without it there is nothing to show.
-- **`source`** is what lets the person keep the site — claiming a preview opens
-  its source in the Archival editor. Skip it and they can look but never own it.
 
 ```bash
 cd <site dir>
 
-# source: everything except build output and version control
 find . -type f \
   -not -path './dist/*' -not -path './.git/*' -not -path './.archival-bin/*' \
   | sed 's|^\./||' \
@@ -78,22 +67,22 @@ find . -type f \
       curl -sS -f -X PUT -H "$AUTH" --data-binary "@$f" \
         "$API/previews/self-serve/file/source/$f" >/dev/null
     done
-
-# dist: the built site
-cd dist && find . -type f | sed 's|^\./||' | while read -r f; do
-  curl -sS -f -X PUT -H "$AUTH" --data-binary "@$f" \
-    "$API/previews/self-serve/file/dist/$f" >/dev/null
-done
 ```
 
-Uploads are idempotent — re-uploading a path replaces it. To remove a file that
-a later edit deleted:
+Uploads are idempotent — re-uploading a path replaces it. To remove a file a
+later edit deleted:
 
 ```bash
-curl -sS -f -X DELETE -H "$AUTH" "$API/previews/self-serve/file/dist/old-page.html"
+curl -sS -f -X DELETE -H "$AUTH" "$API/previews/self-serve/file/source/old-page.liquid"
 ```
 
 Paths must be relative; absolute paths, `..`, and empty segments are rejected.
+A source tree containing `carriers/` is refused at build time.
+
+You do not need to set `Content-Type`. What a file is served as is decided from
+its extension, so `curl --data-binary` (which would otherwise send
+`application/x-www-form-urlencoded` and make every page download instead of
+render) needs no special handling.
 
 ### Media does not go here
 
@@ -115,16 +104,16 @@ curl -sS -f -X PUT -H "$AUTH" --data-binary "@hero.jpg" \
   "$API/previews/self-serve/upload/$sha/hero.jpg"
 ```
 
-`start` gives you `uploadsUrl` and `uploadPrefix`; put both in `archival.toml`:
+Pairing gives you `uploadsUrl` and `uploadPrefix`; put both in `archival.toml`:
 
 ```toml
 uploads_url = "https://preview-uploads.archival.dev"
 upload_prefix = "blue-fig-a1b2c3d4/"
 ```
 
-An `image` field then resolves to
-`{uploads_url}/{upload_prefix}{sha}/{filename}` on its own — you write the
-`sha`, `filename` and `mime` into the object file and archival builds the URL:
+A file field then resolves to `{uploads_url}/{upload_prefix}{sha}/{filename}` on
+its own — you write the `sha`, `filename` and `mime` into the object file and
+archival builds the URL:
 
 ```toml
 [[section.image]]
@@ -134,18 +123,13 @@ mime = "image/jpeg"
 display_type = "image"
 ```
 
-Upload the file **before** you build, or the build renders a URL to something
+Upload the file **before** you publish, or the build renders a URL to something
 that is not there yet.
 
-You do not need to set `Content-Type`. What a file is served as is decided from
-its extension, so `curl --data-binary` (which would otherwise send
-`application/x-www-form-urlencoded` and make every page download instead of
-render) needs no special handling.
-
-## 3. Publish
+## 3. Build and publish
 
 ```bash
-curl -sS -f -X POST -H "$AUTH" "$API/previews/self-serve/publish"
+curl -sS -f -X POST -H "$AUTH" "$API/previews/self-serve/build"
 ```
 
 ```json
@@ -156,35 +140,40 @@ curl -sS -f -X POST -H "$AUTH" "$API/previews/self-serve/publish"
 }
 ```
 
-The URL is live immediately — the site is served straight from the uploaded
-`dist`, with no build step on the server. Publishing again after edits is the
-normal loop; upload the changed files and call publish again.
+The server builds the source you uploaded with a pinned `archival` binary and
+serves the result. You do not need the CLI, and you do not upload `dist/`. A
+build failure comes back as `422` with archival's own diagnostic in the body —
+fix what it names and call this again.
+
+Every build replaces the served site wholesale, so a page you deleted from the
+source stops being served. Publishing again after edits is the normal loop:
+upload the changed files and call build again.
 
 ## Limits
 
-| | |
-|---|---|
-| Token lifetime | ~2 hours |
-| Publishes per token | 20 |
-| Files | 500 per kind |
-| Single file | 10 MB |
-| Total | 25 MB of site files, 100 MB of uploads |
+|                     |                                          |
+| ------------------- | ---------------------------------------- |
+| Token lifetime      | ~2 hours                                 |
+| Publishes per token | 20                                       |
+| Files               | 500                                      |
+| Single file         | 10 MB                                    |
+| Total               | 25 MB of site files, 100 MB of uploads   |
 
 A preview with no traffic is deleted after 30 days.
 
 ## Errors
 
-| Status | Meaning |
-|---|---|
-| 400 | Publishing before any `dist` file was uploaded. Upload, then publish. |
-| 401 | Missing, malformed, expired, or unknown token. Get a fresh link. |
-| 403 | Path rejected (absolute, or containing `..` or an empty segment). |
-| 404 | Unknown `<kind>`. It is `source` or `dist`, nothing else. |
-| 413 | File or preview over the size limit. |
-| 429 | Rate limited, or publishes exhausted. |
+| Status | Meaning                                                            |
+| ------ | ------------------------------------------------------------------ |
+| 400    | Building with no source uploaded, or a source tree with `carriers/`. |
+| 401    | Missing, malformed, expired, or unknown token. Get a fresh link.    |
+| 403    | Path rejected (absolute, or containing `..` or an empty segment).  |
+| 413    | File or preview over the size limit.                               |
+| 422    | The build failed. The body is archival's error — fix it and retry. |
+| 429    | Rate limited, or publishes exhausted.                              |
 
-Only 429 is worth retrying, and only after a wait. The rest are all mistakes in
-the request: fix the path, the kind, the order, or get a fresh link.
+429 is worth retrying after a wait, and 422 after fixing what it named. The rest
+are mistakes in the request: fix the path, the order, or get a fresh link.
 
 ## What to tell the person
 
