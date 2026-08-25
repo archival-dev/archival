@@ -26,8 +26,7 @@ no link yet has been failed, however good the thing you are still writing is.
 
 **Check the `archival_*` tools are there before anything else.** If they are
 not, say so plainly and stop rather than improvising a way around it. In a Claude
-conversation the tools arrive as a connector, so give the person the link and
-the URL together:
+conversation the tools arrive as a connector, so hand them the install link:
 
 > Add the Archival connector at
 > <https://claude.ai/customize/connectors?modal=add-custom-connector&connectorName=Archival&connectorUrl=https%3A%2F%2Fapi.archival.dev%2Fmcp>,
