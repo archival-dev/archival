@@ -7,8 +7,8 @@
   },
   "plugins": [
     {
-      "name": "new",
-      "source": "./plugins/new",
+      "name": "archival",
+      "source": "./plugins/archival",
       "description": "Build a new Archival website from a short conversation and publish it to a preview URL."
     }
   ]

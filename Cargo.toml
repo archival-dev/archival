@@ -4,7 +4,7 @@ version = "0.20.1"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 description = "The simplest CMS in existence"
-repository = "https://github.com/jesseditson/archival"
+repository = "https://github.com/archival-dev/archival"
 
 # Release assets are named archival-v{version}-{target}.tar.gz (the `v` is part of
 # both the tag and the file name), and the binary sits one directory deep inside the

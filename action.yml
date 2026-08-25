@@ -36,7 +36,7 @@ runs:
       run: |
         set -euo pipefail
         dir="archival-v${VERSION}-x86_64-unknown-linux-musl"
-        base="https://github.com/jesseditson/archival/releases/download/v${VERSION}"
+        base="https://github.com/archival-dev/archival/releases/download/v${VERSION}"
         cd "$(mktemp -d)"
         curl -fsSL --retry 3 -O "$base/$dir.tar.gz"
         echo "$(curl -fsSL "$base/$dir.tar.gz.sha256")  $dir.tar.gz" | sha256sum -c -

@@ -25,12 +25,12 @@ jobs:
     steps:
       - name: Trigger archival-docs rebuild
         env:
-          # Fine-grained PAT with contents:write on jesseditson/archival-docs.
+          # Fine-grained PAT with contents:write on archival-dev/archival-docs.
           # GITHUB_TOKEN cannot dispatch to another repository.
           GH_TOKEN: ${{ secrets.ARCHIVAL_DOCS_DISPATCH_TOKEN }}
         run: |
           gh api \
             --method POST \
-            /repos/jesseditson/archival-docs/dispatches \
+            /repos/archival-dev/archival-docs/dispatches \
             -f event_type=publish-schemas \
             -F "client_payload[ref]=${GITHUB_REF_NAME}"

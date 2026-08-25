@@ -30,7 +30,7 @@ cargo_toml_version() {
 }
 
 latest_release_version() {
-  curl -fsSL https://api.github.com/repos/jesseditson/archival/releases/latest |
+  curl -fsSL https://api.github.com/repos/archival-dev/archival/releases/latest |
     awk -F'"' '/"tag_name"/ { sub(/^v/, "", $4); print $4; exit }'
 }
 
@@ -81,7 +81,7 @@ esac
 # for every release; a missing asset surfaces as a 404 below rather than here.
 target="$arch-$os"
 name="archival-v$VERSION-$target"
-base="https://github.com/jesseditson/archival/releases/download/v$VERSION"
+base="https://github.com/archival-dev/archival/releases/download/v$VERSION"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT

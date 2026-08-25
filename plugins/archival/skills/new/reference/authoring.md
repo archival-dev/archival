@@ -62,9 +62,14 @@ per-object page is generated.
 | `secret` | Never enters a template — referencing one *fails the build*. Not for static sites. |
 | `["a", "b", "c"]` | An enum: an inline array of allowed strings. |
 
-**Do not hand-write `image` fields.** They need a real `sha` of a file uploaded
-to the CDN, and an invented one renders a broken URL. For a self-serve site, put
-images in `public/` and reference them by path (`/img/hero.jpg`) instead.
+**Media is uploaded, never committed.** An `image`/`video`/`audio`/`upload`
+field carries a `sha`, `filename` and `mime`, and archival resolves the URL as
+`{uploads_url}/{upload_prefix}{sha}/{filename}`. Upload the file first and use
+its real SHA-256 — an invented one renders a URL to nothing. See
+`reference/publishing.md`.
+
+`public/` is for things that are part of the design rather than the content:
+stylesheets, fonts, favicons, an SVG logo.
 
 ### Child fields
 

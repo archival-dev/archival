@@ -56,20 +56,8 @@ check "action.yml archival-version" "$(quoted_value '
     }
 ' action.yml)"
 
-# Schemas published to SchemaStore carry the version in their $id. Schemas with
-# an unversioned $id (archival_template) are skipped.
-for schema in *.schema.json; do
-    id=$(grep '"\$id"' "$schema" | head -1)
-    case "$id" in
-        *jesseditson/archival/v*)
-            check "$schema \$id" \
-                "$(echo "$id" | sed -E 's|.*jesseditson/archival/v([0-9]+\.[0-9]+\.[0-9]+)/.*|\1|')"
-            ;;
-    esac
-done
-
-check "plugins/new/bin/install-archival.sh inferred" \
-    "$(ARCHIVAL_VERSION= plugins/new/bin/install-archival.sh --print-version)"
+check "plugins/archival/bin/install-archival.sh inferred" \
+    "$(ARCHIVAL_VERSION= plugins/archival/bin/install-archival.sh --print-version)"
 
 if [ $FAILED -ne 0 ]; then
     exit 1

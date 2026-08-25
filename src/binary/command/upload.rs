@@ -114,7 +114,7 @@ impl BinaryCommand for Command {
                     .value_parser(value_parser!(String)),
             )
             .arg(
-                arg!(-r --repo <repo_name> "A repo name (e.g. github/jesseditson/blog) to use for this upload. If not provided, will be inferred from the first git remote.")
+                arg!(-r --repo <repo_name> "A repo name (e.g. github/your-org/your-site) to use for this upload. If not provided, will be inferred from the first git remote.")
                     .value_parser(value_parser!(String)),
             )
             .arg(

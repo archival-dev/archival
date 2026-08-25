@@ -16,7 +16,7 @@ Learn more at [archival.dev](https://archival.dev).
 
 Lots of websites are built on archival, including https://archival.dev, which you can check out here:
 
-- https://github.com/jesseditson/archival-docs
+- https://github.com/archival-dev/archival-docs
 
 Another example of a super simple website is a blog:
 

@@ -1,4 +1,4 @@
-# `new` — build an Archival website with a coding agent
+# `archival` — build an Archival website with a coding agent
 
 A Claude Code plugin that turns a short conversation into a working
 [Archival](https://archival.dev) site: it interviews you, writes the site,
@@ -12,8 +12,8 @@ technical decisions itself.
 ## Install
 
 ```
-/plugin marketplace add jesseditson/archival
-/plugin install new@archival
+/plugin marketplace add archival-dev/archival
+/plugin install archival@archival
 ```
 
 Then just say what you want:
@@ -41,9 +41,9 @@ event and menu pages.
 
 | | |
 |---|---|
-| `skills/build-archival-site/SKILL.md` | the workflow |
-| `skills/build-archival-site/reference/authoring.md` | objects, fields, templates, layouts, partials |
-| `skills/build-archival-site/reference/publishing.md` | the publish HTTP contract |
+| `skills/new/SKILL.md` | the workflow |
+| `skills/new/reference/authoring.md` | objects, fields, templates, layouts, partials |
+| `skills/new/reference/publishing.md` | the publish HTTP contract |
 | `bin/install-archival.sh` | downloads a pinned `archival` release, checksum-verified |
 
 `install-archival.sh` records no version. It takes one, falls back to this

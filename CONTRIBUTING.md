@@ -10,12 +10,12 @@ If you're new to open source, the [Open Source Guides](https://opensource.guide/
 archival is intentionally a very small tool, but since it runs in lots of different environments (OSs, WASM, CI), and has an ecosystem of sites and hosts, there's plenty of ways it can be improved. Here are some of the ones we focus on.
 
 - Build things with it - archival makes different choices about data, which means there are always new and interesting ways to use it. If you find your use case isn't smooth, reach out or [file an issue](#reporting-new-issues).
-- Check out the [open issues](https://github.com/jesseditson/archival/issues) to see if anything looks fun to fix. We use the tag [good first issue](https://github.com/jesseditson/archival/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) to indicate ones that are good for folks who haven't contributed yet.
+- Check out the [open issues](https://github.com/archival-dev/archival/issues) to see if anything looks fun to fix. We use the tag [good first issue](https://github.com/archival-dev/archival/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) to indicate ones that are good for folks who haven't contributed yet.
 - Join the [discord](https://archival.dev/chat.html) and ask questions, get the latest updates, and chat with us about your projects.
 
 ### Reporting new issues
 
-The public issue tracker is [here on github](https://github.com/jesseditson/archival/issues). For documentation issues, use the [documentation repo](https://github.com/jesseditson/archival-docs/issues).
+The public issue tracker is [here on github](https://github.com/archival-dev/archival/issues). For documentation issues, use the [documentation repo](https://github.com/archival-dev/archival-docs/issues).
 
 ### Installation
 
@@ -37,7 +37,7 @@ echo "./pre-commit.sh" > .git/hooks/pre-commit
 
 ### Creating a branch
 
-Fork [the repository](https://github.com/jesseditson/archival) and create your branch from `main`. If you've never sent a GitHub pull request before, you can learn how from [this free video series](https://egghead.io/courses/how-to-contribute-to-an-open-source-project-on-github).
+Fork [the repository](https://github.com/archival-dev/archival) and create your branch from `main`. If you've never sent a GitHub pull request before, you can learn how from [this free video series](https://egghead.io/courses/how-to-contribute-to-an-open-source-project-on-github).
 
 ### Testing
 
@@ -62,4 +62,4 @@ https://doc.rust-lang.org/stable/clippy/installation.html
 
 ## License
 
-By contributing to archival, you agree that your contributions will be licensed under its [GNU Affero General Public License v3.0 or later](https://github.com/jesseditson/archival/blob/main/LICENSE).
+By contributing to archival, you agree that your contributions will be licensed under its [GNU Affero General Public License v3.0 or later](https://github.com/archival-dev/archival/blob/main/LICENSE).

@@ -39,7 +39,7 @@ const binPath = join(binDir, `archival${binExt}`);
 const tagName = `v${version}`;
 const tarName = `archival-${tagName}-${target}.tar.gz`;
 const releaseDir = `archival-${tagName}-${target}`;
-const url = `https://github.com/jesseditson/archival/releases/download/${tagName}/${tarName}`;
+const url = `https://github.com/archival-dev/archival/releases/download/${tagName}/${tarName}`;
 const tmpTar = join(binDir, tarName);
 
 if (!existsSync(binDir)) mkdirSync(binDir, { recursive: true });

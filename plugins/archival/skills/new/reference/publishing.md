@@ -11,6 +11,26 @@ AUTH="Authorization: Bearer $ARCHIVAL_PUBLISH_TOKEN"
 The token names the preview. **You never send the preview name** — the server
 resolves it from the token, so a token cannot touch anyone else's site.
 
+## 0. No token? Pair for one
+
+Skip this if a token arrived with the request.
+
+```bash
+# 1. ask for a code
+curl -sS -X POST "$API/previews/self-serve/pair/start"
+# -> { "code": "K7QM…", "verifyUrl": "https://archival.dev/link?c=K7QM…", "expiresIn": 600 }
+
+# 2. show the person the URL and the code, then poll until this stops being 204
+curl -sS -X POST -d "$CODE" "$API/previews/self-serve/pair/poll"
+```
+
+`204` means keep waiting. `200` returns the same body as a launched request —
+token, preview name, uploads URL and prefix, archival version. `404` means the
+code expired or was already collected.
+
+The code is single-use, expires in ten minutes, and only a person clearing a
+challenge in a browser can approve it.
+
 ## 1. Check what you have
 
 ```bash
@@ -75,6 +95,48 @@ curl -sS -f -X DELETE -H "$AUTH" "$API/previews/self-serve/file/dist/old-page.ht
 
 Paths must be relative; absolute paths, `..`, and empty segments are rejected.
 
+### Media does not go here
+
+Images, video, audio and other binaries are **uploads**, not site files. They are
+content-addressed and served from a CDN, which is why an Archival site never
+carries them in its source:
+
+```
+PUT /previews/self-serve/upload/<sha256>/<filename>
+```
+
+`<sha256>` is the SHA-256 of the file, lowercase hex, and the server verifies it
+— a wrong one is a 400. Re-uploading bytes that are already there returns `200`
+with `"existed": true` and writes nothing.
+
+```bash
+sha=$(shasum -a 256 hero.jpg | awk '{print $1}')
+curl -sS -f -X PUT -H "$AUTH" --data-binary "@hero.jpg" \
+  "$API/previews/self-serve/upload/$sha/hero.jpg"
+```
+
+`start` gives you `uploadsUrl` and `uploadPrefix`; put both in `archival.toml`:
+
+```toml
+uploads_url = "https://preview-uploads.archival.dev"
+upload_prefix = "blue-fig-a1b2c3d4/"
+```
+
+An `image` field then resolves to
+`{uploads_url}/{upload_prefix}{sha}/{filename}` on its own — you write the
+`sha`, `filename` and `mime` into the object file and archival builds the URL:
+
+```toml
+[[section.image]]
+sha = "<the sha you uploaded>"
+filename = "hero.jpg"
+mime = "image/jpeg"
+display_type = "image"
+```
+
+Upload the file **before** you build, or the build renders a URL to something
+that is not there yet.
+
 You do not need to set `Content-Type`. What a file is served as is decided from
 its extension, so `curl --data-binary` (which would otherwise send
 `application/x-www-form-urlencoded` and make every page download instead of
@@ -106,7 +168,7 @@ normal loop; upload the changed files and call publish again.
 | Publishes per token | 20 |
 | Files | 500 per kind |
 | Single file | 10 MB |
-| Total | 25 MB per kind |
+| Total | 25 MB of site files, 100 MB of uploads |
 
 A preview with no traffic is deleted after 30 days.
 

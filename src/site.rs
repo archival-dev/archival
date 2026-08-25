@@ -942,7 +942,7 @@ mod tests {
     /// `/`, but the pages that back them are found by walking the filesystem,
     /// which uses the platform separator. This builds such a site end to end so
     /// the two representations stay reconciled (see
-    /// https://github.com/jesseditson/archival/issues/16).
+    /// https://github.com/archival-dev/archival/issues/16).
     fn nested_template_site() -> Result<MemoryFileSystem> {
         let mut fs = MemoryFileSystem::default();
         fs.write_str(
@@ -1145,7 +1145,7 @@ mod tests {
     /// Nothing in the layout dir is built as a page, so every file in it is
     /// includable, in subdirectories and with or without the underscore that
     /// marks a partial in the pages dir (see
-    /// https://github.com/jesseditson/archival/issues/29).
+    /// https://github.com/archival-dev/archival/issues/29).
     #[test]
     fn builds_partials_from_the_layout_dir() -> Result<()> {
         let mut fs = MemoryFileSystem::default();

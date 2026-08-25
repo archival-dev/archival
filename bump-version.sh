@@ -65,12 +65,6 @@ rewrite action.yml awk -v v="$VERSION" '
     { print }
 '
 
-# Schemas published to SchemaStore carry the version in their $id. Schemas with
-# an unversioned $id (archival_template) are left alone.
-for schema in *.schema.json; do
-    rewrite "$schema" sed -E "s|(jesseditson/archival/)v[0-9]+\.[0-9]+\.[0-9]+/|\1v$VERSION/|"
-done
-
 ./check-versions.sh
 
 git commit --quiet --all --message "v$VERSION"
