@@ -263,9 +263,14 @@ impl Site {
         if hashes.is_empty() {
             return 0;
         }
-        for hash in hashes.values() {
-            let hash_slice = hash.to_ne_bytes();
-            hasher.write(&hash_slice);
+        // Sorted, and over paths as well as hashes: a HashMap iterates in an order
+        // derived from its own random state, so hashing values in map order gives a
+        // different id for identical output every time the map is replaced.
+        let mut entries: Vec<(&PathBuf, &u64)> = hashes.iter().collect();
+        entries.sort_unstable_by_key(|(path, _)| *path);
+        for (path, hash) in entries {
+            hasher.write(path.as_os_str().as_encoded_bytes());
+            hasher.write(&hash.to_ne_bytes());
         }
         // Include cache generation to ensure build_id changes after invalidation
         let generation = self.cache_generation.load(atomic::Ordering::Relaxed);
@@ -583,15 +588,21 @@ impl Site {
                     hashes.insert(file, current_hash);
                 }
             }
-            // Remove any files in dest that are no longer in static
-            for path in last_dist_paths {
-                if !copied_paths.contains(&path) {
-                    fs.delete(&path)?;
-                    hashes.remove(&path);
-                }
-            }
         } else {
             debug!("static dir {} does not exist.", static_dir.display());
+        }
+        // Remove build files that are no longer in static. Outside the branch above
+        // because emptying static_dir removes it, and those copies still have to go.
+        // Keys are relative to static_dir, so they only name a build output once
+        // joined onto build_dir.
+        for path in last_dist_paths {
+            if !copied_paths.contains(&path) {
+                let dest = build_dir.join(&path);
+                if fs.exists(&dest)? {
+                    fs.delete(&dest)?;
+                }
+                hashes.remove(&path);
+            }
         }
         Ok(())
     }
@@ -1205,6 +1216,80 @@ mod tests {
         assert!(
             !fs.exists(site.manifest.build_dir.join("sidebar.html"))?,
             "a layout was also rendered as a page"
+        );
+        Ok(())
+    }
+
+    /// A static file's cache key is relative to `static_dir`, so deleting it has to
+    /// be resolved against `build_dir`. A key that also names a real source file is
+    /// what makes getting this wrong destructive rather than merely ineffective.
+    #[test]
+    fn removing_a_static_file_does_not_delete_the_source_it_shadows() -> Result<()> {
+        let mut fs = MemoryFileSystem::default();
+        fs.write_str(
+            Path::new(OBJECT_DEFINITION_FILE_NAME),
+            "[post]\nname = \"string\"\n".to_string(),
+        )?;
+        let source = Path::new("objects/post/a-post.toml");
+        fs.write_str(source, "name = \"A Post\"\n".to_string())?;
+        // Shadows the source path once `public/` is stripped.
+        let shadowing_static = Path::new("public/objects/post/a-post.toml");
+        fs.write_str(shadowing_static, "static\n".to_string())?;
+        fs.write_str(Path::new("pages/index.liquid"), "index\n".to_string())?;
+
+        let site = Site::load(&fs, Some("test"))?;
+        site.sync_static_files(&mut fs)?;
+        let copied = site.manifest.build_dir.join("objects/post/a-post.toml");
+        assert!(
+            fs.exists(&copied)?,
+            "static file was not copied into the build"
+        );
+
+        fs.delete(shadowing_static)?;
+        site.sync_static_files(&mut fs)?;
+
+        assert!(
+            fs.exists(source)?,
+            "removing a static file deleted the source file it shadowed"
+        );
+        assert!(
+            !fs.exists(&copied)?,
+            "removed static file was left behind in the build"
+        );
+        Ok(())
+    }
+
+    /// `build_cache` is replaced wholesale by every build, and a fresh `HashMap`
+    /// iterates in an order derived from its own random state - so an id derived from
+    /// map order changes even when nothing about the output did.
+    #[test]
+    fn build_id_is_stable_across_builds_with_identical_output() -> Result<()> {
+        // Enough outputs that two fresh HashMaps almost certainly iterate differently;
+        // with two or three entries the orders coincide often enough to pass by luck.
+        let mut fs = MemoryFileSystem::default();
+        fs.write_str(
+            Path::new(OBJECT_DEFINITION_FILE_NAME),
+            "[post]\ntemplate = \"post\"\nname = \"string\"\n".to_string(),
+        )?;
+        for i in 0..24 {
+            fs.write_str(
+                Path::new(&format!("objects/post/post-{i}.toml")),
+                format!("name = \"Post {i}\"\n"),
+            )?;
+        }
+        fs.write_str(
+            Path::new("pages/post.liquid"),
+            "{{ post.name }}\n".to_string(),
+        )?;
+        fs.write_str(Path::new("pages/index.liquid"), "index\n".to_string())?;
+        let site = Site::load(&fs, Some("test"))?;
+        site.build(&mut fs, BuildOptions::default())?;
+        let first = site.build_id();
+        site.build(&mut fs, BuildOptions::default())?;
+        assert_eq!(
+            first,
+            site.build_id(),
+            "build id moved despite identical output"
         );
         Ok(())
     }

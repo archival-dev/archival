@@ -375,8 +375,12 @@ impl<F: FileSystemAPI + Clone + Debug> Archival<F> {
             false,
         )?;
         // Object is valid, write it
-        self.fs_mutex
-            .with_fs(|fs| fs.write_str(&self.object_path_impl(obj_type, filename, fs)?, contents))
+        self.fs_mutex.with_fs(|fs| {
+            let path = self.object_path_impl(obj_type, filename, fs)?;
+            fs.write_str(&path, contents)?;
+            self.site.invalidate_file(&path);
+            Ok(())
+        })
     }
     fn modify_object_file(
         &self,

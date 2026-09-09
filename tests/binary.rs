@@ -140,7 +140,6 @@ mod binary_tests {
     #[test]
     #[traced_test]
     fn run_removes_files_when_objects_deleted() {
-        _ = fs::remove_dir_all("tests/fixtures/website/dist");
         assert!(Path::new("tests/fixtures/website").exists());
         _ = fs::create_dir("tests/fixtures/tmp");
         let site_path = format!("tests/fixtures/tmp/{}", nanoid!());
@@ -234,10 +233,16 @@ mod binary_tests {
         current_buf
     }
 
+    /// Copies a site's source. `dist` is skipped because `build_basics` rebuilds the
+    /// shared fixture's copy of it concurrently, and walking a tree another test is
+    /// deleting from fails on whichever file it removes first.
     fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io::Result<()> {
         fs::create_dir_all(&dst)?;
         for entry in fs::read_dir(src)? {
             let entry = entry?;
+            if entry.file_name() == "dist" {
+                continue;
+            }
             let ty = entry.file_type()?;
             if ty.is_dir() {
                 copy_dir_all(entry.path(), dst.as_ref().join(entry.file_name()))?;
