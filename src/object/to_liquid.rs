@@ -1,5 +1,6 @@
 use crate::{
     fields::{File, ObjectValues},
+    object::context_value::{ContextObject, ContextValue},
     FieldConfig, FieldValue, ObjectDefinition,
 };
 use liquid::model::{KString, ObjectIndex};
@@ -15,8 +16,8 @@ pub fn object_to_liquid_with(
     definition: &ObjectDefinition,
     field_config: &FieldConfig,
     options: ToLiquidOptions,
-) -> liquid::model::Object {
-    let mut values: Vec<(KString, Value)> = definition
+) -> ContextObject {
+    let mut values: Vec<(KString, ContextValue)> = definition
         .fields
         .iter()
         // Secret fields are never added to template contexts.
@@ -27,11 +28,11 @@ pub fn object_to_liquid_with(
                 object_values
                     .get(k)
                     .map(|v| v.to_liquid_with(field_config, options))
-                    .unwrap_or_else(|| Value::Nil),
+                    .unwrap_or_else(ContextValue::nil),
             )
         })
         .collect();
-    let mut child_values: Vec<(KString, Value)> = definition
+    let mut child_values: Vec<(KString, ContextValue)> = definition
         .children
         .iter()
         .map(|(k, child_def)| {
@@ -40,15 +41,18 @@ pub fn object_to_liquid_with(
                 object_values
                     .get(k)
                     .map(|v| v.typed_objects_with(child_def, field_config, options))
-                    .unwrap_or_else(|| Value::Array(vec![])),
+                    .unwrap_or_else(|| ContextValue::Array(vec![])),
             )
         })
         .collect();
-    let mut meta_values: Vec<(KString, Value)> = object_values
+    let mut meta_values: Vec<(KString, ContextValue)> = object_values
         .iter()
         .filter_map(|(k, v)| {
             if let FieldValue::Meta(meta) = v {
-                Some((KString::from_ref(k.as_index()), meta.to_liquid()))
+                Some((
+                    KString::from_ref(k.as_index()),
+                    ContextValue::from(meta.to_liquid()),
+                ))
             } else {
                 None
             }
@@ -60,7 +64,7 @@ pub fn object_to_liquid_with(
 }
 
 impl FieldValue {
-    pub fn to_liquid(&self, field_config: &FieldConfig) -> liquid::model::Value {
+    pub fn to_liquid(&self, field_config: &FieldConfig) -> ContextValue {
         self.to_liquid_with(field_config, ToLiquidOptions::default())
     }
 
@@ -68,38 +72,46 @@ impl FieldValue {
         &self,
         field_config: &FieldConfig,
         options: ToLiquidOptions,
-    ) -> liquid::model::Value {
+    ) -> ContextValue {
         match self {
             // Belt and braces: secret-typed fields are dropped from contexts
             // above, but a secret value can never render regardless.
             FieldValue::Secret(s) => {
                 if options.include_secrets {
-                    liquid::model::Value::scalar(s.to_owned())
+                    ContextValue::from(Value::scalar(s.to_owned()))
                 } else {
-                    liquid::model::Value::Nil
+                    ContextValue::nil()
                 }
             }
             FieldValue::File(file) => file.to_liquid(field_config),
             FieldValue::Oneof((t, v)) => match v.as_ref() {
-                Some(v) => liquid::object!({
-                    "type": t,
-                    "value": v.to_liquid_with(field_config, options)
-                })
-                .into(),
-                None => liquid::model::Value::Nil,
+                Some(v) => ContextValue::Object(
+                    [
+                        (
+                            KString::from_static("type"),
+                            ContextValue::from(Value::scalar(t.to_owned())),
+                        ),
+                        (
+                            KString::from_static("value"),
+                            v.to_liquid_with(field_config, options),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+                None => ContextValue::nil(),
             },
-            _ => self.to_value(),
+            _ => ContextValue::from(self.to_value()),
         }
     }
 }
 
 impl File {
-    pub fn to_liquid(&self, field_config: &FieldConfig) -> liquid::model::Value {
-        let mut m = liquid::model::Object::new();
-        for (k, v) in self.clone().into_map(Some(field_config)) {
-            m.insert(k.into(), liquid::model::Value::scalar(v));
-        }
-        liquid_core::Value::Object(m)
+    pub fn to_liquid(&self, field_config: &FieldConfig) -> ContextValue {
+        ContextValue::File(crate::object::Renderable::rendered(
+            self.clone(),
+            field_config,
+        ))
     }
 }
 
@@ -187,7 +199,7 @@ mod secret_tests {
         assert_eq!(reparsed.values, object.values);
     }
 
-    fn liquid_values(options: ToLiquidOptions) -> liquid::model::Object {
+    fn liquid_values(options: ToLiquidOptions) -> ContextObject {
         let (definition, object) = artist();
         object_to_liquid_with(
             &object.values,

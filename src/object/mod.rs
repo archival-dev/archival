@@ -9,10 +9,8 @@ use crate::{
     FieldConfig,
 };
 use anyhow::Result;
-use liquid::{
-    model::{KString, Value},
-    ObjectView, ValueView,
-};
+use context_value::ContextObject;
+use liquid::{model::KString, ObjectView, ValueView};
 use ordermap::OrderMap;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -23,6 +21,7 @@ use std::{
 use to_liquid::{object_to_liquid_with, ToLiquidOptions};
 use toml::Table;
 use tracing::{instrument, warn};
+pub(crate) mod context_value;
 mod object_entry;
 pub(crate) mod to_liquid;
 pub use object_entry::{ObjectEntry, RenderedObjectEntry};
@@ -284,7 +283,7 @@ impl Object {
         &self,
         definition: &ObjectDefinition,
         field_config: &FieldConfig,
-    ) -> Value {
+    ) -> ContextObject {
         self.liquid_object_with(definition, field_config, ToLiquidOptions::default())
     }
 
@@ -293,7 +292,7 @@ impl Object {
         definition: &ObjectDefinition,
         field_config: &FieldConfig,
         options: ToLiquidOptions,
-    ) -> Value {
+    ) -> ContextObject {
         let mut values = object_to_liquid_with(&self.values, definition, field_config, options);
         // Reserved/special
         if values.contains_key("path") {
@@ -302,9 +301,9 @@ impl Object {
         if values.contains_key("order") {
             panic!("Objects may not define order key.");
         }
-        values.insert(KString::from_ref("path"), self.url_path().to_value());
-        values.insert(KString::from_ref("order"), self.order.to_value());
-        Value::Object(values)
+        values.insert(KString::from_ref("path"), self.url_path().to_value().into());
+        values.insert(KString::from_ref("order"), self.order.to_value().into());
+        values
     }
 }
 

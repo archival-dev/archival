@@ -91,9 +91,7 @@ impl ValueView for DisplayType {
     }
 }
 
-#[derive(
-    Debug, ObjectView, ValueView, Deserialize, Serialize, Clone, PartialEq, PartialOrd, Hash,
-)]
+#[derive(Debug, ObjectView, Deserialize, Serialize, Clone, PartialEq, PartialOrd, Hash)]
 #[cfg_attr(feature = "typescript", derive(typescript_type_def::TypeDef))]
 pub struct RenderedFile {
     pub display_type: DisplayType,
@@ -104,6 +102,54 @@ pub struct RenderedFile {
     pub description: Option<String>,
     pub url: String,
 }
+/// A file is its url everywhere a template asks for one value - `{{ photo }}`,
+/// a string filter, a comparison - while `{{ photo.url }}` and every other key
+/// keep working through `as_object`. Rendering it as an object instead spells
+/// each key and value into the page run together, which builds, so nothing but
+/// the broken page reports it.
+///
+/// `to_value` stays an object: it is what a value flattens to when liquid has
+/// to own it (`{% assign %}`, json for carriers), where dropping the keys would
+/// be the worse trade.
+impl ValueView for RenderedFile {
+    fn as_debug(&self) -> &dyn std::fmt::Debug {
+        self
+    }
+    fn render(&self) -> model::DisplayCow<'_> {
+        model::DisplayCow::Borrowed(&self.url)
+    }
+    fn source(&self) -> model::DisplayCow<'_> {
+        model::DisplayCow::Borrowed(&self.url)
+    }
+    fn type_name(&self) -> &'static str {
+        "object"
+    }
+    fn query_state(&self, state: model::State) -> bool {
+        match state {
+            model::State::Truthy => true,
+            model::State::DefaultValue | model::State::Empty | model::State::Blank => {
+                self.url.is_empty()
+            }
+        }
+    }
+    fn to_kstr(&self) -> model::KStringCow<'_> {
+        model::KStringCow::from_ref(&self.url)
+    }
+    fn as_scalar(&self) -> Option<model::ScalarCow<'_>> {
+        Some(model::ScalarCow::new(self.url.as_str()))
+    }
+    fn to_value(&self) -> liquid_core::Value {
+        liquid_core::Value::Object(
+            ObjectView::iter(self)
+                .map(|(k, v)| (model::KString::from_string(k.into_string()), v.to_value()))
+                .collect(),
+        )
+    }
+    fn as_object(&self) -> Option<&dyn ObjectView> {
+        Some(self)
+    }
+}
+
 impl RenderedFile {
     pub fn from_file(file: File, field_config: &FieldConfig) -> Self {
         let url = file.url(field_config);

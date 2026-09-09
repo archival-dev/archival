@@ -5,14 +5,15 @@ use crate::{
         ExitStatus,
     },
     file_system_stdlib,
-    object::ObjectEntry,
+    object::{
+        context_value::{ContextObject, ContextValue},
+        ObjectEntry,
+    },
     page::debug_context,
     site::Site,
 };
 use anyhow::Result;
 use clap::ArgMatches;
-use liquid_core::Value;
-use ordermap::OrderMap;
 use std::sync::{atomic::AtomicBool, Arc};
 
 pub struct Command {}
@@ -34,25 +35,24 @@ impl BinaryCommand for Command {
         let root_dir = command_root(args);
         let fs = file_system_stdlib::NativeFileSystem::new(&root_dir);
         let site = Site::load(&fs, Some(""))?;
-        let mut objects: OrderMap<String, liquid::model::Value> = OrderMap::new();
+        let mut objects = ContextObject::new();
         let definitions = &site.object_definitions;
         for (name, obj_entry) in site.get_objects(&fs)? {
             let definition = definitions
                 .get(&name)
                 .unwrap_or_else(|| panic!("missing object definition {}", name));
             let values = match obj_entry {
-                ObjectEntry::List(l) => Value::array(
+                ObjectEntry::List(l) => ContextValue::array(
                     l.iter()
-                        .map(|o| o.liquid_object(definition, &site.field_config)),
+                        .map(|o| o.liquid_object(definition, &site.field_config).into()),
                 ),
-                ObjectEntry::Object(o) => o.liquid_object(definition, &site.field_config),
+                ObjectEntry::Object(o) => o.liquid_object(definition, &site.field_config).into(),
             };
-            objects.insert(name.to_string(), values);
+            objects.insert(liquid::model::KString::from_string(name.clone()), values);
         }
-        println!(
-            "{}",
-            debug_context(&liquid::object!({"objects": objects}), 0)
-        );
+        let mut context = ContextObject::new();
+        context.insert("objects".into(), ContextValue::Object(objects));
+        println!("{}", debug_context(&context, 0));
         // let page = Page::new(
         //     "objects-template",
         //     "",
