@@ -104,11 +104,12 @@ impl FileGraphNode {
 
 #[derive(Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MemoryFileSystem {
-    // File contents are Arc'd so cloning the filesystem is cheap (editors
-    // clone it to derive reversible changes and to snapshot for caching).
-    // Writes always replace the whole Arc, so clones never observe mutation.
+    // Contents and directory nodes are both Arc'd so cloning the filesystem copies
+    // pointers rather than data: editors clone it per edit to derive reversible
+    // changes, and a build snapshots it. Every write replaces the whole Arc, so a
+    // clone never observes a later mutation.
     fs: BTreeMap<String, std::sync::Arc<Vec<u8>>>,
-    tree: BTreeMap<String, FileGraphNode>,
+    tree: BTreeMap<String, std::sync::Arc<FileGraphNode>>,
 }
 impl Debug for MemoryFileSystem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -116,7 +117,7 @@ impl Debug for MemoryFileSystem {
         #[allow(dead_code)]
         struct DisplayMemoryFileSystem<'a> {
             files: Vec<&'a String>,
-            tree: &'a BTreeMap<String, FileGraphNode>,
+            tree: &'a BTreeMap<String, std::sync::Arc<FileGraphNode>>,
         }
         let Self { fs, tree } = self;
 
@@ -152,6 +153,11 @@ impl MemoryFileSystem {
 }
 
 impl FileSystemAPI for MemoryFileSystem {
+    /// Contents sit behind `Arc`, so this copies pointers rather than bytes, and a
+    /// write always replaces the whole `Arc` - a snapshot never observes a later write.
+    fn snapshot(&self) -> Option<Self> {
+        Some(self.clone())
+    }
     fn root_dir(&self) -> &Path {
         Path::new("<memory>")
     }
@@ -290,7 +296,8 @@ impl MemoryFileSystem {
                 node.add(&last_path, is_file);
                 // After we add the first file, everything else will be directories.
                 is_file = false;
-                self.tree.insert(FileGraphNode::key(&a_path), node);
+                self.tree
+                    .insert(FileGraphNode::key(&a_path), std::sync::Arc::new(node));
             }
             a_path.clone_into(&mut last_path);
         }
@@ -356,7 +363,8 @@ impl MemoryFileSystem {
             } else {
                 // If the file has siblings, just write the updated value and
                 // stop traversing.
-                self.tree.insert(FileGraphNode::key(&a_path), node);
+                self.tree
+                    .insert(FileGraphNode::key(&a_path), std::sync::Arc::new(node));
                 break;
             }
             a_path.clone_into(&mut last_path);

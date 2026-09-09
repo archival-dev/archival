@@ -52,6 +52,10 @@ impl NativeFileSystem {
 }
 
 impl FileSystemAPI for NativeFileSystem {
+    /// A real directory cannot be frozen, and this type is only a path to one.
+    fn snapshot(&self) -> Option<Self> {
+        None
+    }
     fn root_dir(&self) -> &Path {
         &self.root
     }

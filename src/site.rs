@@ -83,6 +83,95 @@ impl std::fmt::Debug for ParserCache {
 
 const TEMPLATE_CACHE_MAX_ENTRIES: usize = 256;
 
+/// The filesystem mutations a build resolved to, computed without touching the
+/// filesystem so the work can run off the write lock.
+///
+/// Deletions are named explicitly rather than derived at apply time from "everything
+/// the plan did not mention". A plan that visits only part of the site is then applied
+/// by the same code as a plan that visits all of it, instead of pruning every output it
+/// did not look at.
+#[derive(Debug, Default)]
+pub struct WritePlan {
+    dirs: Vec<PathBuf>,
+    writes: Vec<(PathBuf, Vec<u8>, u64)>,
+    /// Outputs that rendered to what is already on disk. They keep their cache entry
+    /// without carrying their bytes, which is what keeps peak memory at the size of
+    /// what actually changed.
+    unchanged: Vec<(PathBuf, u64)>,
+    deletes: Vec<PathBuf>,
+}
+
+impl WritePlan {
+    /// Files this plan accounts for, whether or not it writes them.
+    fn visited(&self) -> HashSet<&PathBuf> {
+        self.writes
+            .iter()
+            .map(|(path, _, _)| path)
+            .chain(self.unchanged.iter().map(|(path, _)| path))
+            .collect()
+    }
+
+    fn record(
+        &mut self,
+        cache: &RwLock<HashMap<PathBuf, u64>>,
+        dir: Option<PathBuf>,
+        path: PathBuf,
+        contents: Vec<u8>,
+        hash: u64,
+    ) {
+        if cache.read().unwrap().get(&path) == Some(&hash) {
+            self.unchanged.push((path, hash));
+            return;
+        }
+        if let Some(dir) = dir {
+            self.dirs.push(dir);
+        }
+        self.writes.push((path, contents, hash));
+    }
+
+    /// Everything previously written that this plan did not account for.
+    fn delete_unvisited(&mut self, cache: &RwLock<HashMap<PathBuf, u64>>) {
+        let visited = self.visited();
+        let stale: Vec<PathBuf> = cache
+            .read()
+            .unwrap()
+            .keys()
+            .filter(|key| !visited.contains(key))
+            .cloned()
+            .collect();
+        self.deletes.extend(stale);
+    }
+
+    /// Applies the plan, updating `cache` as each write lands. A failure part-way
+    /// through therefore leaves the cache describing exactly what reached the
+    /// filesystem, rather than claiming content that was never written - which would
+    /// make the next build skip those pages for good.
+    pub(crate) fn apply<T: FileSystemAPI>(
+        self,
+        fs: &mut T,
+        cache: &RwLock<HashMap<PathBuf, u64>>,
+    ) -> Result<()> {
+        for dir in &self.dirs {
+            fs.create_dir_all(dir)?;
+        }
+        let mut cache = cache.write().unwrap();
+        for (path, contents, hash) in self.writes {
+            fs.write(&path, contents)?;
+            cache.insert(path, hash);
+        }
+        for (path, hash) in self.unchanged {
+            cache.insert(path, hash);
+        }
+        for path in self.deletes {
+            if fs.exists(&path)? {
+                fs.delete(&path)?;
+            }
+            cache.remove(&path);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Site {
     pub object_definitions: ObjectDefinitions,
@@ -257,6 +346,14 @@ impl Site {
         self.cache_generation.load(atomic::Ordering::Relaxed)
     }
 
+    pub(crate) fn build_cache(&self) -> &RwLock<HashMap<PathBuf, u64>> {
+        &self.build_cache
+    }
+
+    pub(crate) fn static_file_cache(&self) -> &RwLock<HashMap<PathBuf, u64>> {
+        &self.static_file_cache
+    }
+
     pub fn build_id(&self) -> u64 {
         let mut hasher = SeaHasher::new();
         let hashes = self.build_cache.read().unwrap();
@@ -356,9 +453,19 @@ impl Site {
 
     #[instrument(skip(fs))]
     pub fn get_objects<T: FileSystemAPI>(&self, fs: &T) -> Result<ObjectMap> {
-        self.get_objects_sorted(
+        self.get_objects_at(fs, self.objects_generation())
+    }
+
+    /// `get_objects` against a filesystem that was current at `generation`.
+    pub(crate) fn get_objects_at<T: FileSystemAPI>(
+        &self,
+        fs: &T,
+        generation: u64,
+    ) -> Result<ObjectMap> {
+        self.get_objects_sorted_at(
             fs,
             Some(|a: &_, b: &_| get_order(a).partial_cmp(&get_order(b)).unwrap()),
+            generation,
         )
     }
     #[instrument(skip(fs))]
@@ -392,10 +499,12 @@ impl Site {
     pub fn invalidate_file(&self, file: &Path) {
         #[cfg(feature = "verbose-logging")]
         debug!("invalidate {}", file.display());
-        self.obj_cache.write().unwrap().remove(file);
-        // Increment cache generation to ensure build_id changes after invalidation.
-        // We don't clear build_cache here because it's needed for file cleanup
-        // in site.build() - it tracks which output files need to be deleted.
+        // The bump happens under the object cache's own guard: a plan reading a stale
+        // snapshot checks the generation while holding that guard before it caches a
+        // parse, so the two cannot interleave. build_cache is deliberately untouched -
+        // site.build() needs it to know which outputs to remove.
+        let mut cache = self.obj_cache.write().unwrap();
+        cache.remove(file);
         self.cache_generation
             .fetch_add(1, atomic::Ordering::Relaxed);
     }
@@ -427,15 +536,16 @@ impl Site {
             .object_definitions
             .get(object_name)
             .ok_or_else(|| InvalidFileError::UnknownObject(object_name.to_string()))?;
+        let generation = self.objects_generation();
         let mut cache = self.obj_cache.write().unwrap();
         if let Some(filename) = filename {
             let root_path = self.path_for_object(object_name, None);
             if filename == object_name && fs.exists(&root_path)? {
-                return self.object_for_path(&root_path, object_def, &mut cache, fs);
+                return self.object_for_path(&root_path, object_def, &mut cache, fs, generation);
             }
         }
         let path = self.path_for_object(object_name, filename);
-        self.object_for_path(&path, object_def, &mut cache, fs)
+        self.object_for_path(&path, object_def, &mut cache, fs, generation)
     }
 
     fn path_for_object(&self, object_name: &str, filename: Option<&str>) -> PathBuf {
@@ -455,6 +565,15 @@ impl Site {
         fs: &T,
         sort: Option<impl Fn(&Object, &Object) -> Ordering>,
     ) -> Result<ObjectMap> {
+        self.get_objects_sorted_at(fs, sort, self.objects_generation())
+    }
+
+    fn get_objects_sorted_at<T: FileSystemAPI>(
+        &self,
+        fs: &T,
+        sort: Option<impl Fn(&Object, &Object) -> Ordering>,
+        generation: u64,
+    ) -> Result<ObjectMap> {
         let mut all_objects: ObjectMap = ObjectMap::new();
         let objects_dir = &self.manifest.objects_dir;
         for (object_name, object_def) in self.object_definitions.iter() {
@@ -472,7 +591,7 @@ impl Site {
                 let mut objects: Vec<Object> = Vec::new();
                 for file in fs.walk_dir(&object_files_path, false)? {
                     let path = object_files_path.join(&file);
-                    match self.object_for_path(&path, object_def, &mut cache, fs) {
+                    match self.object_for_path(&path, object_def, &mut cache, fs, generation) {
                         Ok(obj) => {
                             objects.push(obj);
                         }
@@ -488,7 +607,13 @@ impl Site {
                 }
                 all_objects.insert(object_name.clone(), ObjectEntry::from_vec(objects));
             } else if fs.exists(&object_file_path)? {
-                match self.object_for_path(&object_file_path, object_def, &mut cache, fs) {
+                match self.object_for_path(
+                    &object_file_path,
+                    object_def,
+                    &mut cache,
+                    fs,
+                    generation,
+                ) {
                     Ok(obj) => {
                         all_objects.insert(object_name.clone(), ObjectEntry::from_object(obj));
                     }
@@ -511,12 +636,16 @@ impl Site {
     }
 
     #[instrument(skip(object_def, cache, fs))]
+    /// `generation` is the object generation the `fs` being read was current at. A parse
+    /// from an older one is returned but not cached: the invalidation that moved the
+    /// generation already dropped this entry, and nothing would drop it again.
     fn object_for_path<T: FileSystemAPI>(
         &self,
         path: &Path,
         object_def: &ObjectDefinition,
         cache: &mut HashMap<PathBuf, Object>,
         fs: &T,
+        generation: u64,
     ) -> Result<Object> {
         let ext = path
             .extension()
@@ -543,72 +672,76 @@ impl Site {
                 // objects with invalid unset keys
                 true,
             )?;
-            cache.insert(path.to_path_buf(), o.clone());
+            if self.cache_generation.load(atomic::Ordering::Relaxed) == generation {
+                cache.insert(path.to_path_buf(), o.clone());
+            }
             Ok(o)
         }
     }
 
     #[instrument(skip(fs))]
     pub fn sync_static_files<T: FileSystemAPI>(&self, fs: &mut T) -> Result<()> {
+        let plan = self.plan_static_sync(&*fs)?;
+        plan.apply(fs, &self.static_file_cache)
+    }
+
+    /// Resolves the static copy to the writes and deletes it implies, reading only
+    /// `static_dir`.
+    ///
+    /// The cache is keyed by destination, like `build_cache`: a key relative to
+    /// `static_dir` names a build output only once joined onto `build_dir`, and using
+    /// one where the other belongs deletes the source a static file shadows.
+    pub fn plan_static_sync<T: FileSystemAPI>(&self, fs: &T) -> Result<WritePlan> {
         let Manifest {
             static_dir,
             build_dir,
             ..
         } = &self.manifest;
+        let mut plan = WritePlan::default();
         if !fs.exists(build_dir)? {
-            fs.create_dir_all(build_dir)?;
+            plan.dirs.push(build_dir.to_owned());
         }
-        let mut hashes = self.static_file_cache.write().unwrap();
-        let last_dist_paths: Vec<PathBuf> = hashes.keys().cloned().collect();
-        let mut copied_paths: HashSet<PathBuf> = HashSet::new();
-        // Copy static files
         #[cfg(feature = "verbose-logging")]
         debug!("copying files from {}", static_dir.display());
         if fs.exists(static_dir)? {
             for file in fs.walk_dir(static_dir, false)? {
                 let from = static_dir.join(&file);
                 if let Some(content) = fs.read(&from)? {
-                    let current_hash = hash_file(&content);
-                    copied_paths.insert(file.clone());
-                    // If there is an existing hash and it matches the current
-                    // file, leave it there.
-                    if let Some(existing_hash) = hashes.get(&file) {
-                        if *existing_hash == current_hash {
-                            continue;
-                        }
-                    }
-                    // Otherwise, copy the file and store the latest hash.
+                    let hash = hash_file(&content);
                     let dest = build_dir.join(&file);
-                    if let Some(dirname) = dest.parent() {
-                        if dirname != build_dir {
-                            fs.create_dir_all(dirname)?;
-                        }
-                    }
-                    fs.write(&dest, content)?;
-                    hashes.insert(file, current_hash);
+                    let dir = dest
+                        .parent()
+                        .filter(|parent| *parent != build_dir)
+                        .map(|parent| parent.to_path_buf());
+                    plan.record(&self.static_file_cache, dir, dest, content, hash);
                 }
             }
         } else {
             debug!("static dir {} does not exist.", static_dir.display());
         }
-        // Remove build files that are no longer in static. Outside the branch above
-        // because emptying static_dir removes it, and those copies still have to go.
-        // Keys are relative to static_dir, so they only name a build output once
-        // joined onto build_dir.
-        for path in last_dist_paths {
-            if !copied_paths.contains(&path) {
-                let dest = build_dir.join(&path);
-                if fs.exists(&dest)? {
-                    fs.delete(&dest)?;
-                }
-                hashes.remove(&path);
-            }
-        }
-        Ok(())
+        plan.delete_unvisited(&self.static_file_cache);
+        Ok(plan)
     }
 
     #[instrument(skip(fs))]
     pub fn build<T: FileSystemAPI>(&self, fs: &mut T, options: BuildOptions) -> Result<()> {
+        let plan = self.plan_build(&*fs, options, self.objects_generation())?;
+        plan.apply(fs, &self.build_cache)
+    }
+
+    /// Resolves a build to the filesystem mutations it implies, without performing any
+    /// of them. Reads only `objects_dir`, `pages_dir` and `layout_dir`; everything it
+    /// produces lands under `build_dir`, which `Manifest::validate_build_dir` keeps
+    /// disjoint from all three - so this can run against a snapshot taken before the
+    /// write lock was released. `generation` is the object generation that snapshot was
+    /// current at; parses from an older one are used but not cached.
+    #[instrument(skip(fs))]
+    pub fn plan_build<T: FileSystemAPI>(
+        &self,
+        fs: &T,
+        options: BuildOptions,
+        generation: u64,
+    ) -> Result<WritePlan> {
         let Manifest {
             objects_dir,
             layout_dir,
@@ -622,7 +755,7 @@ impl Site {
             site_url: site_url.as_ref().map(|v| v.into()).unwrap_or_default(),
         };
 
-        let mut built_hashes = HashMap::new();
+        let mut plan = WritePlan::default();
 
         // Validate paths
         if !fs.exists(objects_dir)? {
@@ -640,20 +773,10 @@ impl Site {
             .into());
         }
         if !fs.exists(build_dir)? {
-            fs.create_dir_all(build_dir)?;
+            plan.dirs.push(build_dir.to_owned());
         }
 
-        let all_objects = self.get_objects(fs)?;
-
-        // for (n, os) in &all_objects {
-        //     debug!("{}", n);
-        //     for o in os {
-        //         debug!("{}", o.filename);
-        //         for (k, v) in &o.values {
-        //             debug!("{}: {:?}", k, v);
-        //         }
-        //     }
-        // }
+        let all_objects = self.get_objects_at(fs, generation)?;
 
         let liquid_parser = self.get_or_build_parser(
             pages_dir,
@@ -727,7 +850,7 @@ impl Site {
                         for object in t_objects.into_iter() {
                             #[cfg(feature = "verbose-logging")]
                             debug!("rendering {}", object.filename);
-                            let result = Self::render_template_page(
+                            let result = Self::plan_template_page(
                                 object,
                                 object_def,
                                 &parsed_template,
@@ -735,9 +858,9 @@ impl Site {
                                 build_dir,
                                 &self.field_config,
                                 &base_context,
-                                fs,
                                 &liquid_parser,
                                 &self.build_cache,
+                                &mut plan,
                             )
                             .map_err(|error| {
                                 BuildError::TemplateRenderError(
@@ -753,8 +876,7 @@ impl Site {
                                     continue;
                                 }
                             }
-                            let (path, hash) = result?;
-                            built_hashes.insert(path, hash);
+                            result?;
                         }
                     }
                 }
@@ -790,7 +912,7 @@ impl Site {
                         page_type.extension()
                     );
                     let result = self
-                        .render_page(
+                        .plan_page(
                             &rel_path,
                             &file_path,
                             page_name,
@@ -799,6 +921,7 @@ impl Site {
                             &base_context,
                             fs,
                             &liquid_parser,
+                            &mut plan,
                         )
                         .map_err(|error| {
                             BuildError::PageRenderError(page_name.to_string(), error.to_string())
@@ -810,38 +933,29 @@ impl Site {
                             continue;
                         }
                     }
-                    let (path, hash) = result?;
-                    if let Some(path) = path {
-                        built_hashes.insert(path, hash);
-                    }
+                    result?;
                 }
             }
         }
 
-        let mut current_cache = self.build_cache.write().unwrap();
-        for key in current_cache.keys() {
-            if !built_hashes.contains_key(key) {
-                fs.delete(key)?;
-            }
-        }
-        *current_cache = built_hashes;
-        Ok(())
+        plan.delete_unvisited(&self.build_cache);
+        Ok(plan)
     }
 
-    #[instrument(skip(template, base_context, fs, liquid_parser))]
+    #[instrument(skip(template, base_context, liquid_parser, plan))]
     #[allow(clippy::too_many_arguments)]
-    fn render_template_page<T: FileSystemAPI>(
+    fn plan_template_page(
         object: &Object,
         object_def: &ObjectDefinition,
         template: &liquid::Template,
         template_path: &PathBuf,
-        build_dir: &PathBuf,
+        build_dir: &Path,
         field_config: &FieldConfig,
         base_context: &liquid::Object,
-        fs: &mut T,
         liquid_parser: &liquid::Parser,
         build_cache: &RwLock<HashMap<PathBuf, u64>>,
-    ) -> Result<(PathBuf, u64)> {
+        plan: &mut WritePlan,
+    ) -> Result<PathBuf> {
         let page = Page::new_with_parsed_template(
             object.filename.clone(),
             object_def,
@@ -859,79 +973,65 @@ impl Site {
         let rendered = layout::post_process(render_o?);
         let render_name = format!("{}.{}", object.filename, page.extension());
         let t_dir = build_dir.join(&object_def.name);
-        fs.create_dir_all(&t_dir)?;
         let build_path = t_dir.join(render_name);
         let hash = hash_file(rendered.as_bytes());
-        let should_write = if let Some(prev_hash) = build_cache.read().unwrap().get(&build_path) {
-            hash != *prev_hash
-        } else {
-            true
-        };
-        if should_write {
-            #[cfg(feature = "verbose-logging")]
-            debug!("write template {}", build_path.display());
-            fs.write_str(&build_path, rendered)?;
-        } else {
-            #[cfg(feature = "verbose-logging")]
-            debug!("template no-op {}", build_path.display());
-        }
-        Ok((build_path, hash))
+        plan.record(
+            build_cache,
+            Some(t_dir),
+            build_path.clone(),
+            rendered.into_bytes(),
+            hash,
+        );
+        Ok(build_path)
     }
 
-    #[instrument(skip(self, base_context, fs, liquid_parser))]
+    #[instrument(skip(self, base_context, fs, liquid_parser, plan))]
     #[allow(clippy::too_many_arguments)]
-    fn render_page<T: FileSystemAPI>(
+    fn plan_page<T: FileSystemAPI>(
         &self,
         rel_path: &PathBuf,
         file_path: &PathBuf,
         page_name: &str,
         page_type: TemplateType,
-        build_dir: &PathBuf,
+        build_dir: &Path,
         base_context: &liquid::Object,
-        fs: &mut T,
+        fs: &T,
         liquid_parser: &liquid::Parser,
-    ) -> Result<(Option<PathBuf>, u64)> {
+        plan: &mut WritePlan,
+    ) -> Result<Option<PathBuf>> {
         let field_config = &self.field_config;
-        let build_cache = &self.build_cache;
-        if let Some(template_str) = fs.read_to_string(file_path)? {
-            let template = self.get_or_parse_template(liquid_parser, &template_str)?;
-            let page = Page::new_with_parsed_content(
-                page_name.to_string(),
-                &template,
-                TemplateType::Default,
-                file_path,
-            );
-            let render_o = page.render(liquid_parser, base_context, field_config);
-            if render_o.is_err() {
-                warn!("failed rendering {}", file_path.display());
-            }
-            let rendered = layout::post_process(render_o?);
-            let mut render_dir = build_dir.to_path_buf();
-            if let Some(parent_dir) = rel_path.parent() {
-                render_dir = render_dir.join(parent_dir);
-                fs.create_dir_all(&render_dir)?;
-            }
-            let render_path = render_dir.join(format!("{}.{}", page_name, page_type.extension()));
-            let hash = hash_file(rendered.as_bytes());
-            let should_write =
-                if let Some(prev_hash) = build_cache.read().unwrap().get(&render_path) {
-                    hash != *prev_hash
-                } else {
-                    true
-                };
-            if should_write {
-                #[cfg(feature = "verbose-logging")]
-                debug!("write page {}", render_path.display());
-                fs.write_str(&render_path, rendered)?;
-            } else {
-                #[cfg(feature = "verbose-logging")]
-                debug!("page no-op {}", render_path.display());
-            }
-            Ok((Some(render_path), hash))
-        } else {
+        let Some(template_str) = fs.read_to_string(file_path)? else {
             warn!("page not found: {}", file_path.display());
-            Ok((None, hash_file(&[])))
+            return Ok(None);
+        };
+        let template = self.get_or_parse_template(liquid_parser, &template_str)?;
+        let page = Page::new_with_parsed_content(
+            page_name.to_string(),
+            &template,
+            TemplateType::Default,
+            file_path,
+        );
+        let render_o = page.render(liquid_parser, base_context, field_config);
+        if render_o.is_err() {
+            warn!("failed rendering {}", file_path.display());
         }
+        let rendered = layout::post_process(render_o?);
+        let mut render_dir = build_dir.to_path_buf();
+        let mut nested_dir = None;
+        if let Some(parent_dir) = rel_path.parent() {
+            render_dir = render_dir.join(parent_dir);
+            nested_dir = Some(render_dir.clone());
+        }
+        let render_path = render_dir.join(format!("{}.{}", page_name, page_type.extension()));
+        let hash = hash_file(rendered.as_bytes());
+        plan.record(
+            &self.build_cache,
+            nested_dir,
+            render_path.clone(),
+            rendered.into_bytes(),
+            hash,
+        );
+        Ok(Some(render_path))
     }
 }
 
@@ -1290,6 +1390,51 @@ mod tests {
             first,
             site.build_id(),
             "build id moved despite identical output"
+        );
+        Ok(())
+    }
+
+    /// A build plans against a snapshot taken before it released the write lock. If an
+    /// edit lands in that window, the plan parses the pre-edit bytes - and must not leave
+    /// that parse in the live object cache, which nothing would invalidate a second time.
+    #[test]
+    fn a_plan_from_a_stale_snapshot_does_not_poison_the_object_cache() -> Result<()> {
+        let mut fs = MemoryFileSystem::default();
+        fs.write_str(
+            Path::new(OBJECT_DEFINITION_FILE_NAME),
+            "[post]\ntemplate = \"post\"\nname = \"string\"\n".to_string(),
+        )?;
+        let object = Path::new("objects/post/a-post.toml");
+        fs.write_str(object, "name = \"Original\"\n".to_string())?;
+        fs.write_str(
+            Path::new("pages/post.liquid"),
+            "{{ post.name }}\n".to_string(),
+        )?;
+        fs.write_str(Path::new("pages/index.liquid"), "index\n".to_string())?;
+
+        let site = Site::load(&fs, Some("test"))?;
+        site.build(&mut fs, BuildOptions::default())?;
+
+        // A build takes its snapshot here and releases the lock.
+        let snapshot = fs.snapshot().expect("memory filesystems snapshot");
+        let generation = site.objects_generation();
+
+        // An edit lands while that build is still planning.
+        fs.write_str(object, "name = \"Edited\"\n".to_string())?;
+        site.invalidate_file(object);
+
+        // The in-flight build plans against bytes that are now stale.
+        let _ = site.plan_build(&snapshot, BuildOptions::default(), generation)?;
+
+        // The next build reads the live filesystem, and must not be handed the pre-edit
+        // parse the stale plan just went through.
+        site.build(&mut fs, BuildOptions::default())?;
+        let rendered = fs
+            .read_to_string(site.manifest.build_dir.join("post").join("a-post.html"))?
+            .expect("page was not built");
+        assert!(
+            rendered.contains("Edited"),
+            "a stale snapshot's parse was served from the object cache: {rendered}"
         );
         Ok(())
     }

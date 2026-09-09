@@ -7,6 +7,13 @@ use std::{
 use tracing::debug;
 
 pub trait FileSystemAPI: Send + Sync + Default {
+    /// A point-in-time copy of this filesystem, or `None` when the backend cannot make
+    /// one. `Clone` is not that guarantee: a filesystem backed by a real directory
+    /// clones into another handle on the same live tree, so a build computed against it
+    /// would still be reading what it is writing.
+    fn snapshot(&self) -> Option<Self>
+    where
+        Self: Sized;
     fn root_dir(&self) -> &Path;
     fn exists(&self, path: impl AsRef<Path>) -> Result<bool>;
     fn is_dir(&self, path: impl AsRef<Path>) -> Result<bool>;

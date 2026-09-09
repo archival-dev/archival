@@ -40,6 +40,8 @@ pub enum InvalidManifestError {
     BadPath(Value, String),
     #[error("Cannot define a nested validator for type {0} ({1})")]
     InvalidNestedValidator(String, String),
+    #[error("build_dir ({0}) overlaps {1} ({2}); a build must not read what it writes")]
+    BuildDirOverlapsSource(String, String, String),
     #[error("Invalid Manifest value '{1}' for field {0}.")]
     InvalidField(Value, String),
     #[error("Invalid Metadata value '{1}' for field {0}.")]
@@ -522,7 +524,32 @@ impl Manifest {
                 _ => {}
             }
         }
+        manifest.validate_build_dir()?;
         Ok(manifest)
+    }
+
+    /// A build reads its source directories and writes only into `build_dir`, which is
+    /// what lets the whole build be computed against a read-only snapshot. Nesting one
+    /// inside the other breaks that: a static sync would copy the build into itself, and
+    /// `NativeFileSystem::walk_dir` is lazy, so it observes those writes inside the same
+    /// walk that is producing them.
+    fn validate_build_dir(&self) -> Result<()> {
+        for (name, dir) in [
+            ("objects", &self.objects_dir),
+            ("pages", &self.pages_dir),
+            ("layout_dir", &self.layout_dir),
+            ("static_dir", &self.static_dir),
+        ] {
+            if self.build_dir.starts_with(dir) || dir.starts_with(&self.build_dir) {
+                return Err(InvalidManifestError::BuildDirOverlapsSource(
+                    self.build_dir.to_string_lossy().to_string(),
+                    name.to_string(),
+                    dir.to_string_lossy().to_string(),
+                )
+                .into());
+            }
+        }
+        Ok(())
     }
 
     pub fn from_file(
@@ -834,6 +861,30 @@ validate = ".+"
 foo = "bar"
 baz = "hello!"
 "#
+    }
+
+    /// A build reads its source dirs and writes only into build_dir. Nesting either
+    /// inside the other makes a build read what it just wrote, which is the invariant
+    /// the whole plan/apply split rests on.
+    #[test]
+    fn build_dir_may_not_overlap_a_source_dir() {
+        for manifest in [
+            "build_dir = \"public/dist\"\n",
+            "static_dir = \"dist/public\"\n",
+            "build_dir = \"pages\"\n",
+            "objects = \"dist\"\n",
+        ] {
+            let result = Manifest::from_string(Path::new(""), manifest.to_string(), Some("test"));
+            assert!(
+                result.is_err(),
+                "overlapping directories were accepted: {manifest}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_default_layout_keeps_build_dir_separate() {
+        assert!(Manifest::from_string(Path::new(""), String::new(), Some("test")).is_ok());
     }
 
     #[test]

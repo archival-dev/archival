@@ -44,6 +44,7 @@ use std::fmt::Debug;
 use std::hash::Hasher;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::Mutex;
 use tracing::{debug, error};
 #[cfg(feature = "binary")]
 pub mod binary;
@@ -160,6 +161,11 @@ pub struct Archival<F: FileSystemAPI + Clone + Debug> {
     fs_mutex: FileSystemMutex<F>,
     pub site: site::Site,
     last_build_id: AtomicU64,
+    /// Serializes whole builds. `Site::build_cache` is read while a build is planned
+    /// and written when it is applied, so two builds interleaving those halves would
+    /// leave the cache describing neither. Readers never take this - keeping them off
+    /// the filesystem mutex for the length of a render is the point of planning off it.
+    build_lock: Mutex<()>,
 }
 
 impl<F: FileSystemAPI + Clone + Debug> Archival<F> {
@@ -182,6 +188,7 @@ impl<F: FileSystemAPI + Clone + Debug> Archival<F> {
             fs_mutex,
             site,
             last_build_id: AtomicU64::new(0),
+            build_lock: Mutex::new(()),
         })
     }
     pub fn new_with_upload_prefix(fs: F, upload_prefix: &str) -> Result<Self> {
@@ -191,37 +198,66 @@ impl<F: FileSystemAPI + Clone + Debug> Archival<F> {
             fs_mutex,
             site,
             last_build_id: AtomicU64::new(0),
+            build_lock: Mutex::new(()),
         })
     }
+    /// Builds the site, holding the filesystem mutex only to take a snapshot and to
+    /// apply the result. Backends that cannot snapshot (a real directory) plan and apply
+    /// under one acquisition instead - the same two functions either way, so neither
+    /// path is exercised only by the other's callers.
     pub fn build(&self, options: BuildOptions) -> Result<ArchivalBuildId> {
-        let (build_id, built) = self.fs_mutex.with_fs(|fs| {
-            if !options.skip_static {
-                self.site.sync_static_files(fs)?;
-            }
-            let build_id = self.site.build_id();
-            let should_build =
-                build_id == 0 || self.last_build_id.load(AtomicOrdering::Relaxed) != build_id;
-            if should_build {
-                debug!("build {} {:#?}", self.site, options);
-                self.site.build(fs, options)?;
-            } else {
-                #[cfg(feature = "verbose-logging")]
-                debug!("skipping duplicate build");
-            }
-            // Recompute build_id after site.build() populates the cache
-            let final_build_id = self.site.build_id();
-            Ok((final_build_id, should_build))
-        })?;
-        // Only update last_build_id if we actually built
-        if built {
-            self.last_build_id
-                .fetch_update(AtomicOrdering::Relaxed, AtomicOrdering::Relaxed, |_| {
-                    Some(build_id)
-                })
-                .unwrap();
+        let _build = self
+            .build_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let build_id = self.site.build_id();
+        let should_build =
+            build_id == 0 || self.last_build_id.load(AtomicOrdering::Relaxed) != build_id;
+        if !should_build {
+            #[cfg(feature = "verbose-logging")]
+            debug!("skipping duplicate build");
+            return Ok(self.last_build_id.load(AtomicOrdering::Relaxed));
         }
-        Ok(self.last_build_id.load(AtomicOrdering::Relaxed))
+        debug!("build {} {:#?}", self.site, options);
+
+        // Both under one acquisition: every mutator invalidates inside its own `with_fs`,
+        // so a generation read there cannot drift from the bytes the snapshot holds.
+        let (snapshot, generation) = self
+            .fs_mutex
+            .with_fs(|fs| Ok((fs.snapshot(), self.site.objects_generation())))?;
+        match snapshot {
+            Some(snapshot) => {
+                let statics = if options.skip_static {
+                    None
+                } else {
+                    Some(self.site.plan_static_sync(&snapshot)?)
+                };
+                let pages = self.site.plan_build(&snapshot, options, generation)?;
+                self.fs_mutex.with_fs(|fs| {
+                    if let Some(statics) = statics {
+                        statics.apply(fs, self.site.static_file_cache())?;
+                    }
+                    pages.apply(fs, self.site.build_cache())
+                })?;
+            }
+            None => self.fs_mutex.with_fs(|fs| {
+                if !options.skip_static {
+                    let statics = self.site.plan_static_sync(&*fs)?;
+                    statics.apply(fs, self.site.static_file_cache())?;
+                }
+                let pages = self
+                    .site
+                    .plan_build(&*fs, options, self.site.objects_generation())?;
+                pages.apply(fs, self.site.build_cache())
+            })?,
+        }
+
+        let final_build_id = self.site.build_id();
+        self.last_build_id
+            .store(final_build_id, AtomicOrdering::Relaxed);
+        Ok(final_build_id)
     }
+
     #[cfg(feature = "json-schema")]
     pub fn dump_schemas(&self) -> Result<()> {
         debug!("dump schemas {}", self.site);
