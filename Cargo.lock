@@ -1470,6 +1470,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b4baf93f58d4425749ca49a51c50ebab072c5df6994d08fed93541c331481dc"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1581,7 +1590,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a494c3f9dad3cb7ed16f1c51812cbe4b29493d6c2e5cd1e2b87477263d9534d"
 dependencies = [
  "liquid-core",
- "liquid-derive",
+ "liquid-derive 0.26.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "liquid-lib",
  "serde",
 ]
@@ -1589,18 +1598,25 @@ dependencies = [
 [[package]]
 name = "liquid-core"
 version = "0.26.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc623edee8a618b4543e8e8505584f4847a4e51b805db1af6d9af0a3395d0d57"
 dependencies = [
  "anymap2",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "kstring",
- "liquid-derive",
+ "liquid-derive 0.26.10",
  "pest",
  "pest_derive",
  "regex",
  "serde",
  "time",
+]
+
+[[package]]
+name = "liquid-derive"
+version = "0.26.10"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
 ]
 
 [[package]]

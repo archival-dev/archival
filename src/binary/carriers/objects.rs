@@ -52,15 +52,15 @@ pub(crate) fn build_payload<F: FileSystemAPI>(
             .object_definitions
             .get(&name)
             .unwrap_or_else(|| panic!("missing object definition {}", name));
-        let value =
-            match &entry {
-                ObjectEntry::List(objects) => Value::array(objects.iter().map(|o| {
-                    o.liquid_object_with(definition, &site.field_config, CARRIER_OPTIONS)
-                })),
-                ObjectEntry::Object(o) => {
-                    o.liquid_object_with(definition, &site.field_config, CARRIER_OPTIONS)
-                }
-            };
+        let value = match &entry {
+            ObjectEntry::List(objects) => Value::array(objects.iter().map(|o| {
+                o.liquid_object_with(definition, &site.field_config, CARRIER_OPTIONS)
+                    .to_value()
+            })),
+            ObjectEntry::Object(o) => o
+                .liquid_object_with(definition, &site.field_config, CARRIER_OPTIONS)
+                .to_value(),
+        };
         for object in entry.into_iter() {
             collect_uploads(object, &mut uploads);
         }

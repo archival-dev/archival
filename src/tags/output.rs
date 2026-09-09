@@ -291,6 +291,123 @@ mod tests {
         }
     }
 
+    /// A file field is its url everywhere a template asks for one value.
+    /// Depends on the context tree keeping `&dyn ValueView` leaves and on
+    /// liquid borrowing them out of a frame rather than owning them.
+    mod files {
+        use crate::fields::{DisplayType, FieldConfig, File};
+        use crate::object::context_value::{ContextObject, ContextValue};
+        use liquid::ValueView;
+
+        fn photo() -> File {
+            File::new(
+                "abc123",
+                Some("A photo"),
+                None,
+                "IMG_1122.jpeg",
+                "image/jpeg",
+                DisplayType::Image,
+            )
+        }
+
+        fn render_ctx(template: &str, context: &ContextObject) -> String {
+            let parser = crate::liquid_parser::build_with_partials(Default::default()).unwrap();
+            crate::liquid_parser::parse(&parser, template)
+                .unwrap()
+                .render(context)
+                .unwrap()
+        }
+
+        fn photo_context() -> (ContextObject, String) {
+            let config = FieldConfig::default();
+            let file = photo();
+            let url = file.url(&config);
+            let mut context = ContextObject::new();
+            context.insert("photo".into(), file.to_liquid(&config));
+            (context, url)
+        }
+
+        #[test]
+        fn a_file_renders_as_its_url() {
+            let (context, url) = photo_context();
+            assert_eq!(render_ctx("{{ photo }}", &context), url);
+            assert_eq!(
+                render_ctx(r#"<img src="{{ photo }}">"#, &context),
+                format!(r#"<img src="{url}">"#)
+            );
+        }
+
+        #[test]
+        fn a_files_keys_are_still_reachable() {
+            let (context, url) = photo_context();
+            assert_eq!(render_ctx("{{ photo.url }}", &context), url);
+            assert_eq!(render_ctx("{{ photo.name }}", &context), "A photo");
+            assert_eq!(render_ctx("{{ photo.mime }}", &context), "image/jpeg");
+            assert_eq!(
+                render_ctx("{{ photo.filename }}", &context),
+                "IMG_1122.jpeg"
+            );
+        }
+
+        /// A url is a string, so the filters and comparisons a template reaches
+        /// for read it as one.
+        #[test]
+        fn a_file_behaves_as_its_url_string() {
+            let (context, url) = photo_context();
+            assert_eq!(
+                render_ctx(r#"{{ photo | append: "?w=100" }}"#, &context),
+                format!("{url}?w=100")
+            );
+            assert_eq!(
+                render_ctx(
+                    "{% if photo contains 'IMG_1122' %}yes{% else %}no{% endif %}",
+                    &context
+                ),
+                "yes"
+            );
+        }
+
+        /// Files reach a template nested in child objects and lists, and the
+        /// loop that walks them still iterates.
+        #[test]
+        fn a_nested_file_renders_as_its_url() {
+            let config = FieldConfig::default();
+            let url = photo().url(&config);
+            let mut child = ContextObject::new();
+            child.insert("photo".into(), photo().to_liquid(&config));
+            let mut context = ContextObject::new();
+            context.insert(
+                "gallery".into(),
+                ContextValue::array([ContextValue::Object(child)]),
+            );
+            assert_eq!(
+                render_ctx(
+                    "{% for item in gallery %}{{ item.photo }}{% endfor %}",
+                    &context
+                ),
+                url
+            );
+            assert_eq!(
+                render_ctx("{{ gallery[0].photo.name }}", &context),
+                "A photo"
+            );
+            assert_eq!(render_ctx("{{ gallery.size }}", &context), "1");
+        }
+
+        /// Only rendering changed: everything reading the tree as data - the
+        /// carrier payload, the objects command, json pages - still sees the
+        /// whole file object.
+        #[test]
+        fn a_file_is_still_an_object_as_data() {
+            let (context, url) = photo_context();
+            let value = context.get("photo").unwrap().to_value();
+            let object = value.as_object().expect("a file is an object as data");
+            assert_eq!(object.get("url").unwrap().to_kstr(), url);
+            assert_eq!(object.get("sha").unwrap().to_kstr(), "abc123");
+            assert_eq!(object.get("mime").unwrap().to_kstr(), "image/jpeg");
+        }
+    }
+
     #[test]
     fn liquid_in_a_value_is_rendered() {
         let globals = liquid::object!({ "body": "hello {{ name }}", "name": "world" });

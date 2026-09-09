@@ -152,3 +152,6 @@ assertables = "9.8.6"
 
 [build-dependencies]
 prost-build = { version = "0.14.1", optional = true }
+
+[patch.crates-io]
+liquid-core = { path = "/Users/jesseditson/code/liquid-rust/crates/core" }

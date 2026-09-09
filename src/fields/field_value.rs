@@ -9,7 +9,7 @@ use crate::object::to_liquid::{object_to_liquid_with, ToLiquidOptions};
 use crate::object::Renderable;
 use crate::util::integer_decode;
 use crate::value_path::ValuePathError;
-use crate::{FieldConfig, ObjectDefinition, ValuePath};
+use crate::{object::context_value::ContextValue, FieldConfig, ObjectDefinition, ValuePath};
 use anyhow::Result;
 use comrak::{markdown_to_html, ComrakOptions};
 use liquid::{model, ValueView};
@@ -275,7 +275,7 @@ impl FieldValue {
         &self,
         definition: &ObjectDefinition,
         field_config: &FieldConfig,
-    ) -> model::Value {
+    ) -> ContextValue {
         self.typed_objects_with(definition, field_config, ToLiquidOptions::default())
     }
 
@@ -284,13 +284,13 @@ impl FieldValue {
         definition: &ObjectDefinition,
         field_config: &FieldConfig,
         options: ToLiquidOptions,
-    ) -> model::Value {
+    ) -> ContextValue {
         if let FieldValue::Objects(children) = self {
-            model::Value::Array(
+            ContextValue::Array(
                 children
                     .iter()
                     .map(|child| {
-                        model::Value::Object(object_to_liquid_with(
+                        ContextValue::Object(object_to_liquid_with(
                             child,
                             definition,
                             field_config,
@@ -1274,7 +1274,8 @@ pub mod file_tests {
             .parse("{% if file %}BLANK{% else %}OH NO!!{% endif %}")
             .unwrap();
         let field_config = FieldConfig::default();
-        let ctx = liquid::object!({ "file": file.to_liquid(&field_config) });
+        let mut ctx = crate::object::context_value::ContextObject::new();
+        ctx.insert("file".into(), file.to_liquid(&field_config));
         assert_eq!(template.render(&ctx).unwrap(), "BLANK");
     }
 }

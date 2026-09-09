@@ -1,31 +1,23 @@
 use crate::{
-    object::{Object, ObjectEntry},
+    object::{
+        context_value::{ContextObject, ContextValue},
+        Object, ObjectEntry,
+    },
     object_definition::ObjectDefinition,
     tags::render::RenderContext,
     FieldConfig, ObjectDefinitions, ObjectMap,
 };
 use anyhow::Result;
-use liquid::{model::ScalarCow, ValueView};
+use liquid::ValueView;
 use liquid_core::Value;
 use once_cell::sync::Lazy;
 use pluralizer::pluralize;
 use regex::Regex;
 use std::{
     borrow::Cow,
-    env,
-    error::Error,
-    fmt,
+    env, fmt,
     path::{Path, PathBuf},
 };
-
-#[derive(Debug, Clone)]
-struct InvalidPageError;
-impl Error for InvalidPageError {}
-impl fmt::Display for InvalidPageError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "invalid page")
-    }
-}
 
 static TEMPLATE_FILE_NAME_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^(.+?)(\.\w+)?\.liquid").unwrap());
@@ -112,8 +104,11 @@ pub struct RenderGlobals<'a> {
 }
 
 impl RenderGlobals<'_> {
-    fn inject(&self, object: &mut liquid::Object) {
-        object.insert("site_url".into(), Value::scalar(self.site_url.to_string()));
+    fn inject(&self, object: &mut ContextObject) {
+        object.insert(
+            "site_url".into(),
+            Value::scalar(self.site_url.to_string()).into(),
+        );
     }
 }
 
@@ -137,19 +132,22 @@ pub fn build_context(
     definitions: &ObjectDefinitions,
     field_config: &FieldConfig,
     globals: &RenderGlobals,
-) -> liquid::Object {
+) -> ContextObject {
     let _span = tracing::trace_span!("build_context").entered();
-    let mut context = liquid::Object::new();
-    let mut objects = liquid::Object::new();
+    let mut context = ContextObject::new();
+    let mut objects = ContextObject::new();
     for (name, obj_entry) in objects_map {
         let definition = definitions
             .get(name)
             .unwrap_or_else(|| panic!("missing object definition {}", name));
         let values = match obj_entry {
-            ObjectEntry::List(l) => {
-                Value::array(l.iter().map(|o| o.liquid_object(definition, field_config)))
+            ObjectEntry::List(l) => ContextValue::array(
+                l.iter()
+                    .map(|o| ContextValue::Object(o.liquid_object(definition, field_config))),
+            ),
+            ObjectEntry::Object(o) => {
+                ContextValue::Object(o.liquid_object(definition, field_config))
             }
-            ObjectEntry::Object(o) => o.liquid_object(definition, field_config),
         };
         objects.insert(name.into(), values.clone());
         context.insert(
@@ -167,14 +165,14 @@ pub fn build_context(
 /// shared keys without deep-cloning the (large) shared context for every page.
 #[derive(Debug)]
 struct LayeredContext<'a> {
-    overlay: &'a liquid::Object,
-    base: &'a liquid::Object,
+    overlay: &'a ContextObject,
+    base: &'a ContextObject,
 }
 
 impl LayeredContext<'_> {
-    fn merged(&self) -> liquid::Object {
+    fn merged(&self) -> ContextObject {
         let mut merged = self.base.clone();
-        merged.extend(self.overlay.iter().map(|(k, v)| (k.clone(), v.clone())));
+        merged.extend(self.overlay.entries().map(|(k, v)| (k.clone(), v.clone())));
         merged
     }
 }
@@ -213,7 +211,7 @@ impl ValueView for LayeredContext<'_> {
         liquid::model::KStringCow::from_string(self.to_string())
     }
     fn to_value(&self) -> Value {
-        Value::Object(self.merged())
+        self.merged().to_value()
     }
     fn as_object(&self) -> Option<&dyn liquid::ObjectView> {
         Some(self)
@@ -230,13 +228,13 @@ impl liquid::ObjectView for LayeredContext<'_> {
     fn keys<'k>(&'k self) -> Box<dyn Iterator<Item = liquid::model::KStringCow<'k>> + 'k> {
         Box::new(
             self.overlay
-                .keys()
+                .key_strs()
                 .chain(
                     self.base
-                        .keys()
-                        .filter(|k| !self.overlay.contains_key(k.as_str())),
+                        .key_strs()
+                        .filter(|k| !self.overlay.contains_key(k)),
                 )
-                .map(|k| k.as_ref().into()),
+                .map(|k| k.into()),
         )
     }
     fn values<'k>(&'k self) -> Box<dyn Iterator<Item = &'k dyn ValueView> + 'k> {
@@ -247,13 +245,13 @@ impl liquid::ObjectView for LayeredContext<'_> {
     ) -> Box<dyn Iterator<Item = (liquid::model::KStringCow<'k>, &'k dyn ValueView)> + 'k> {
         Box::new(
             self.overlay
-                .iter()
+                .entries()
                 .chain(
                     self.base
-                        .iter()
+                        .entries()
                         .filter(|(k, _)| !self.overlay.contains_key(k.as_str())),
                 )
-                .map(|(k, v)| (k.as_ref().into(), v.as_view())),
+                .map(|(k, v)| (k.as_ref().into(), v as &dyn ValueView)),
         )
     }
     fn contains_key(&self, index: &str) -> bool {
@@ -263,17 +261,18 @@ impl liquid::ObjectView for LayeredContext<'_> {
         self.overlay
             .get(index)
             .or_else(|| self.base.get(index))
-            .map(|v| v.as_view())
+            .map(|v| v as &dyn ValueView)
     }
 }
 
-pub(crate) fn debug_context(object: &liquid::Object, lp: usize) -> String {
+pub(crate) fn debug_context(object: &ContextObject, lp: usize) -> String {
     let mut debug_str = String::default();
-    fn to_str(val: &Value, lp: usize) -> String {
+    fn to_str(val: &ContextValue, lp: usize) -> String {
         let include_values = env::var("ARCHIVAL_CONTEXT_VALUES").is_ok();
         match val {
-            Value::Object(o) => debug_context(o, lp + 1),
-            Value::Array(a) => {
+            ContextValue::Object(o) => debug_context(o, lp + 1),
+            ContextValue::File(f) => format!(" = {}", f.url),
+            ContextValue::Array(a) => {
                 if include_values {
                     format!(
                         "\n{}↘︎[{} items]{}\n{}⎼⎼⎼",
@@ -298,8 +297,8 @@ pub(crate) fn debug_context(object: &liquid::Object, lp: usize) -> String {
                     )
                 }
             }
-            Value::Nil => " (nil)".to_string(),
-            Value::Scalar(s) => {
+            ContextValue::Liquid(Value::Nil) => " (nil)".to_string(),
+            ContextValue::Liquid(Value::Scalar(s)) => {
                 if include_values {
                     format!(" ({}: {:?})", val.type_name(), s.as_view())
                 } else {
@@ -309,10 +308,8 @@ pub(crate) fn debug_context(object: &liquid::Object, lp: usize) -> String {
             _ => format!(": ({})", val.type_name()),
         }
     }
-    for k in object.keys() {
+    for (k, val) in object.entries() {
         debug_str += &format!("\n{}⌗{}", "  ".repeat(lp), k);
-        let ev = liquid_core::Value::Scalar(ScalarCow::new("empty"));
-        let val = object.get(k).unwrap_or(&ev);
         debug_str += &to_str(val, lp + 1);
     }
     debug_str
@@ -408,12 +405,13 @@ impl<'a> Page<'a> {
     pub fn render(
         &self,
         parser: &liquid::Parser,
-        base_context: &liquid::Object,
+        base_context: &ContextObject,
         field_config: &FieldConfig,
     ) -> Result<String> {
         #[cfg(feature = "verbose-logging")]
         tracing::debug!("rendering {}", self.name);
-        let mut overlay = liquid::object!({ "page": self.name });
+        let mut overlay = ContextObject::new();
+        overlay.insert("page".into(), Value::scalar(self.name.clone()).into());
         if let Some(template_info) = &self.template {
             let parsed;
             let template = match template_info.parsed {
@@ -424,21 +422,23 @@ impl<'a> Page<'a> {
                     &parsed
                 }
             };
-            let mut object_vals = match template_info
+            let mut object_vals = template_info
                 .object
-                .liquid_object(template_info.definition, field_config)
-            {
-                liquid::model::Value::Object(v) => Ok(v),
-                _ => Err(InvalidPageError),
-            }?;
-            object_vals.extend(liquid::object!({
-                "object_name": template_info.object.object_name,
-                "order": template_info.object.order,
-                "path": template_info.object.url_path(),
-            }));
+                .liquid_object(template_info.definition, field_config);
+            object_vals.extend([
+                (
+                    "object_name".into(),
+                    Value::scalar(template_info.object.object_name.clone()).into(),
+                ),
+                ("order".into(), template_info.object.order.to_value().into()),
+                (
+                    "path".into(),
+                    template_info.object.url_path().to_value().into(),
+                ),
+            ]);
             overlay.insert(
                 template_info.definition.name.to_owned().into(),
-                Value::Object(object_vals),
+                object_vals.into(),
             );
             let context = LayeredContext {
                 overlay: &overlay,
