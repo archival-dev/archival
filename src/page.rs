@@ -12,9 +12,12 @@ use pluralizer::pluralize;
 use regex::Regex;
 use std::{
     borrow::Cow,
+    cell::RefCell,
+    collections::{BTreeSet, HashMap},
     env,
     error::Error,
     fmt,
+    hash::Hasher,
     path::{Path, PathBuf},
 };
 
@@ -132,34 +135,260 @@ pub struct Page<'a> {
 /// build. This is by far the most expensive part of setting up a render
 /// (markdown fields are converted to html here), so builds create it once and
 /// share it across pages via [`LayeredContext`].
+/// Signs the shared context so a later build can tell which parts of it moved.
+/// Granularity matches what [`ContextReads`] records, plus one entry per object so
+/// that a template page can be signed against the object it renders.
+#[derive(Debug, Default)]
+pub(crate) struct ContextSignatures {
+    keys: HashMap<String, u64>,
+    objects: HashMap<String, u64>,
+    per_object: HashMap<(String, String), u64>,
+    everything: u64,
+}
+
+impl ContextSignatures {
+    /// The signature a render's recorded reads resolve to, or `None` when it read
+    /// something this context no longer has.
+    pub(crate) fn of(&self, dep: &ContextDep) -> Option<u64> {
+        match dep {
+            ContextDep::Key(key) => self.keys.get(key).copied(),
+            ContextDep::Object(name) => self.objects.get(name).copied(),
+            ContextDep::Everything => Some(self.everything),
+        }
+    }
+
+    /// The signature of one object, which is what a template page renders over.
+    pub(crate) fn object(&self, object_name: &str, filename: &str) -> Option<u64> {
+        self.per_object
+            .get(&(object_name.to_owned(), filename.to_owned()))
+            .copied()
+    }
+}
+
+fn hash_liquid(value: &Value, hasher: &mut seahash::SeaHasher) {
+    match value {
+        Value::Nil => hasher.write_u8(0),
+        Value::State(state) => {
+            hasher.write_u8(1);
+            hasher.write(format!("{:?}", state).as_bytes());
+        }
+        Value::Scalar(scalar) => {
+            hasher.write_u8(2);
+            hasher.write(scalar.to_kstr().as_bytes());
+        }
+        Value::Array(array) => {
+            hasher.write_u8(3);
+            hasher.write_usize(array.len());
+            for item in array {
+                hash_liquid(item, hasher);
+            }
+        }
+        Value::Object(object) => {
+            // liquid's object map is hash-ordered, and two maps holding the same
+            // entries can iterate differently, so the signature has to impose an order.
+            hasher.write_u8(4);
+            hasher.write_usize(object.len());
+            let mut keys: Vec<_> = object.keys().collect();
+            keys.sort();
+            for key in keys {
+                hasher.write(key.as_bytes());
+                if let Some(item) = object.get(key) {
+                    hash_liquid(item, hasher);
+                }
+            }
+        }
+    }
+}
+
+fn signature(value: &Value) -> u64 {
+    let mut hasher = seahash::SeaHasher::new();
+    hash_liquid(value, &mut hasher);
+    hasher.finish()
+}
+
 pub fn build_context(
     objects_map: &ObjectMap,
     definitions: &ObjectDefinitions,
     field_config: &FieldConfig,
     globals: &RenderGlobals,
-) -> liquid::Object {
+) -> (liquid::Object, ContextSignatures) {
     let _span = tracing::trace_span!("build_context").entered();
     let mut context = liquid::Object::new();
     let mut objects = liquid::Object::new();
+    let mut signatures = ContextSignatures::default();
     for (name, obj_entry) in objects_map {
         let definition = definitions
             .get(name)
             .unwrap_or_else(|| panic!("missing object definition {}", name));
         let values = match obj_entry {
-            ObjectEntry::List(l) => {
-                Value::array(l.iter().map(|o| o.liquid_object(definition, field_config)))
+            ObjectEntry::List(l) => Value::array(l.iter().map(|o| {
+                let value = o.liquid_object(definition, field_config);
+                signatures
+                    .per_object
+                    .insert((name.to_owned(), o.filename.to_owned()), signature(&value));
+                value
+            })),
+            ObjectEntry::Object(o) => {
+                let value = o.liquid_object(definition, field_config);
+                signatures
+                    .per_object
+                    .insert((name.to_owned(), o.filename.to_owned()), signature(&value));
+                value
             }
-            ObjectEntry::Object(o) => o.liquid_object(definition, field_config),
         };
+        let value_signature = signature(&values);
+        signatures.objects.insert(name.to_owned(), value_signature);
+        let plural = pluralize(name, if obj_entry.is_list() { 2 } else { 1 }, false);
+        signatures.keys.insert(plural.clone(), value_signature);
         objects.insert(name.into(), values.clone());
-        context.insert(
-            pluralize(name, if obj_entry.is_list() { 2 } else { 1 }, false).into(),
-            values,
-        );
+        context.insert(plural.into(), values);
     }
     globals.inject(&mut context);
-    context.insert("objects".into(), objects.into());
-    context
+    for (key, value) in context.iter() {
+        signatures
+            .keys
+            .entry(key.to_string())
+            .or_insert_with(|| signature(value));
+    }
+    let mut objects_hasher = seahash::SeaHasher::new();
+    let mut object_keys: Vec<_> = signatures.objects.iter().collect();
+    object_keys.sort();
+    for (name, sig) in object_keys {
+        objects_hasher.write(name.as_bytes());
+        objects_hasher.write_u64(*sig);
+    }
+    signatures
+        .keys
+        .insert(OBJECTS_KEY.to_owned(), objects_hasher.finish());
+    context.insert(OBJECTS_KEY.into(), objects.into());
+
+    let mut hasher = seahash::SeaHasher::new();
+    let mut keys: Vec<_> = signatures.keys.iter().collect();
+    keys.sort();
+    for (key, sig) in keys {
+        hasher.write(key.as_bytes());
+        hasher.write_u64(*sig);
+    }
+    signatures.everything = hasher.finish();
+    (context, signatures)
+}
+
+/// The shared context's `objects` entry, under which every object type appears a
+/// second time.
+pub(crate) const OBJECTS_KEY: &str = "objects";
+
+/// Something a render read out of the shared context. Overlay reads are absent by
+/// design: the overlay holds the page's own object, which the caller signs separately.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ContextDep {
+    /// A top-level key.
+    Key(String),
+    /// One entry of the `objects` map.
+    Object(String),
+    /// The context was enumerated rather than indexed, so treat all of it as read.
+    Everything,
+}
+
+/// Collects what one render read. Rendering takes `&self` throughout, so this
+/// accumulates through a cell rather than a `&mut` thread through liquid's traits.
+#[derive(Debug, Default)]
+pub(crate) struct ContextReads(RefCell<BTreeSet<ContextDep>>);
+
+impl ContextReads {
+    fn note(&self, dep: ContextDep) {
+        self.0.borrow_mut().insert(dep);
+    }
+
+    pub(crate) fn take(&self) -> BTreeSet<ContextDep> {
+        std::mem::take(&mut self.0.borrow_mut())
+    }
+}
+
+/// The `objects` map, recording which entries are indexed so that a page reading
+/// `objects.site` depends on `site` rather than on every object in the site.
+#[derive(Debug)]
+struct RecordingObjects<'a> {
+    inner: &'a liquid::Object,
+    reads: &'a ContextReads,
+}
+
+impl fmt::Display for RecordingObjects<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.reads.note(ContextDep::Everything);
+        for (k, v) in self.inner.iter() {
+            write!(f, "{}: {} ", k, v.render())?;
+        }
+        Ok(())
+    }
+}
+
+impl ValueView for RecordingObjects<'_> {
+    fn as_debug(&self) -> &dyn fmt::Debug {
+        self
+    }
+    fn render(&self) -> liquid::model::DisplayCow<'_> {
+        liquid::model::DisplayCow::Owned(Box::new(self))
+    }
+    fn source(&self) -> liquid::model::DisplayCow<'_> {
+        liquid::model::DisplayCow::Owned(Box::new(self))
+    }
+    fn type_name(&self) -> &'static str {
+        "object"
+    }
+    fn query_state(&self, state: liquid::model::State) -> bool {
+        match state {
+            liquid::model::State::Truthy => true,
+            liquid::model::State::DefaultValue
+            | liquid::model::State::Empty
+            | liquid::model::State::Blank => self.inner.is_empty(),
+        }
+    }
+    fn to_kstr(&self) -> liquid::model::KStringCow<'_> {
+        liquid::model::KStringCow::from_string(self.to_string())
+    }
+    fn to_value(&self) -> Value {
+        self.reads.note(ContextDep::Everything);
+        Value::Object(self.inner.clone())
+    }
+    fn as_object(&self) -> Option<&dyn liquid::ObjectView> {
+        Some(self)
+    }
+}
+
+impl liquid::ObjectView for RecordingObjects<'_> {
+    fn as_value(&self) -> &dyn ValueView {
+        self
+    }
+    fn size(&self) -> i64 {
+        self.reads.note(ContextDep::Everything);
+        self.inner.len() as i64
+    }
+    fn keys<'k>(&'k self) -> Box<dyn Iterator<Item = liquid::model::KStringCow<'k>> + 'k> {
+        self.reads.note(ContextDep::Everything);
+        Box::new(self.inner.keys().map(|k| k.as_ref().into()))
+    }
+    fn values<'k>(&'k self) -> Box<dyn Iterator<Item = &'k dyn ValueView> + 'k> {
+        self.reads.note(ContextDep::Everything);
+        Box::new(self.inner.values().map(|v| v.as_view()))
+    }
+    fn iter<'k>(
+        &'k self,
+    ) -> Box<dyn Iterator<Item = (liquid::model::KStringCow<'k>, &'k dyn ValueView)> + 'k> {
+        self.reads.note(ContextDep::Everything);
+        Box::new(
+            self.inner
+                .iter()
+                .map(|(k, v)| (k.as_ref().into(), v.as_view())),
+        )
+    }
+    fn contains_key(&self, index: &str) -> bool {
+        self.reads.note(ContextDep::Object(index.to_owned()));
+        self.inner.contains_key(index)
+    }
+    fn get<'s>(&'s self, index: &str) -> Option<&'s dyn ValueView> {
+        self.reads.note(ContextDep::Object(index.to_owned()));
+        self.inner.get(index).map(|v| v.as_view())
+    }
 }
 
 /// A render context composed of a small per-page overlay on top of the shared
@@ -169,6 +398,23 @@ pub fn build_context(
 struct LayeredContext<'a> {
     overlay: &'a liquid::Object,
     base: &'a liquid::Object,
+    reads: &'a ContextReads,
+    objects: Option<RecordingObjects<'a>>,
+}
+
+impl<'a> LayeredContext<'a> {
+    fn new(overlay: &'a liquid::Object, base: &'a liquid::Object, reads: &'a ContextReads) -> Self {
+        let objects = match base.get(OBJECTS_KEY) {
+            Some(Value::Object(inner)) => Some(RecordingObjects { inner, reads }),
+            _ => None,
+        };
+        Self {
+            overlay,
+            base,
+            reads,
+            objects,
+        }
+    }
 }
 
 impl LayeredContext<'_> {
@@ -228,6 +474,7 @@ impl liquid::ObjectView for LayeredContext<'_> {
         liquid::ObjectView::keys(self).count() as i64
     }
     fn keys<'k>(&'k self) -> Box<dyn Iterator<Item = liquid::model::KStringCow<'k>> + 'k> {
+        self.reads.note(ContextDep::Everything);
         Box::new(
             self.overlay
                 .keys()
@@ -245,6 +492,7 @@ impl liquid::ObjectView for LayeredContext<'_> {
     fn iter<'k>(
         &'k self,
     ) -> Box<dyn Iterator<Item = (liquid::model::KStringCow<'k>, &'k dyn ValueView)> + 'k> {
+        self.reads.note(ContextDep::Everything);
         Box::new(
             self.overlay
                 .iter()
@@ -257,13 +505,26 @@ impl liquid::ObjectView for LayeredContext<'_> {
         )
     }
     fn contains_key(&self, index: &str) -> bool {
-        self.overlay.contains_key(index) || self.base.contains_key(index)
+        if self.overlay.contains_key(index) {
+            return true;
+        }
+        if index == OBJECTS_KEY && self.objects.is_some() {
+            return true;
+        }
+        self.reads.note(ContextDep::Key(index.to_owned()));
+        self.base.contains_key(index)
     }
     fn get<'s>(&'s self, index: &str) -> Option<&'s dyn ValueView> {
-        self.overlay
-            .get(index)
-            .or_else(|| self.base.get(index))
-            .map(|v| v.as_view())
+        if let Some(value) = self.overlay.get(index) {
+            return Some(value.as_view());
+        }
+        if index == OBJECTS_KEY {
+            if let Some(objects) = &self.objects {
+                return Some(objects);
+            }
+        }
+        self.reads.note(ContextDep::Key(index.to_owned()));
+        self.base.get(index).map(|v| v.as_view())
     }
 }
 
@@ -410,6 +671,7 @@ impl<'a> Page<'a> {
         parser: &liquid::Parser,
         base_context: &liquid::Object,
         field_config: &FieldConfig,
+        reads: &ContextReads,
     ) -> Result<String> {
         #[cfg(feature = "verbose-logging")]
         tracing::debug!("rendering {}", self.name);
@@ -440,10 +702,7 @@ impl<'a> Page<'a> {
                 template_info.definition.name.to_owned().into(),
                 Value::Object(object_vals),
             );
-            let context = LayeredContext {
-                overlay: &overlay,
-                base: base_context,
-            };
+            let context = LayeredContext::new(&overlay, base_context, reads);
             template
                 .render(&RenderContext::new(&context))
                 .map_err(|error| {
@@ -465,10 +724,7 @@ impl<'a> Page<'a> {
                     &parsed
                 }
             };
-            let context = LayeredContext {
-                overlay: &overlay,
-                base: base_context,
-            };
+            let context = LayeredContext::new(&overlay, base_context, reads);
             template
                 .render(&RenderContext::new(&context))
                 .map_err(|error| {
@@ -708,14 +964,20 @@ here is a liquid variable: {{site_url}}
         };
         let objects_map = get_objects_map();
         let definition_map = get_definition_map();
-        let base_context = build_context(&objects_map, &definition_map, &field_config, &globals);
+        let (base_context, _signatures) =
+            build_context(&objects_map, &definition_map, &field_config, &globals);
         let page = Page::new(
             "home".to_string(),
             page_content().to_string(),
             TemplateType::Default,
             Path::new("objects/home.toml"),
         );
-        let rendered = page.render(&liquid_parser, &base_context, &field_config)?;
+        let rendered = page.render(
+            &liquid_parser,
+            &base_context,
+            &field_config,
+            &ContextReads::default(),
+        )?;
         println!("rendered: {}", rendered);
         assert!(rendered.contains("name: home"), "filtered object");
         assert!(
@@ -765,7 +1027,8 @@ here is a liquid variable: {{site_url}}
         let object = objects_map["artist"].into_iter().next().unwrap();
         println!("OBJ: {:#?}", object);
         let artist_def = artist_definition();
-        let base_context = build_context(&objects_map, &definition_map, &field_config, &globals);
+        let (base_context, _signatures) =
+            build_context(&objects_map, &definition_map, &field_config, &globals);
         let page = Page::new_with_template(
             "tormenta-rey".to_string(),
             &artist_def,
@@ -774,7 +1037,12 @@ here is a liquid variable: {{site_url}}
             TemplateType::Default,
             Path::new("objects/template.toml"),
         );
-        let rendered = page.render(&liquid_parser, &base_context, &field_config)?;
+        let rendered = page.render(
+            &liquid_parser,
+            &base_context,
+            &field_config,
+            &ContextReads::default(),
+        )?;
         println!("rendered: {}", rendered);
         assert!(rendered.contains("name: Tormenta Rey"), "root field");
         assert!(
@@ -815,14 +1083,20 @@ here is a liquid variable: {{site_url}}
                 description: None,
             },
         )]);
-        let base_context = build_context(&objects_map, &definition_map, &field_config, &globals);
+        let (base_context, _signatures) =
+            build_context(&objects_map, &definition_map, &field_config, &globals);
         let page = Page::new(
             "home".to_string(),
             template.to_string(),
             TemplateType::Default,
             Path::new("objects/home.toml"),
         );
-        page.render(&liquid_parser, &base_context, &field_config)
+        page.render(
+            &liquid_parser,
+            &base_context,
+            &field_config,
+            &ContextReads::default(),
+        )
     }
 
     fn c_object(filename: &str, values: ObjectValues) -> Object {
@@ -925,7 +1199,8 @@ here is a liquid variable: {{site_url}}
         let objects_map = get_objects_map();
         let object = objects_map["artist"].into_iter().next().unwrap();
         let artist_def = artist_definition();
-        let base_context = build_context(&objects_map, &definition_map, &field_config, &globals);
+        let (base_context, _signatures) =
+            build_context(&objects_map, &definition_map, &field_config, &globals);
         let page = Page::new_with_template(
             "tormenta-rey".to_string(),
             &artist_def,
@@ -937,7 +1212,12 @@ here is a liquid variable: {{site_url}}
         // Secrets are omitted from contexts entirely, so referencing one is an
         // unknown index rather than an empty value.
         let err = page
-            .render(&liquid_parser, &base_context, &field_config)
+            .render(
+                &liquid_parser,
+                &base_context,
+                &field_config,
+                &ContextReads::default(),
+            )
             .expect_err("rendering a secret should fail");
         assert!(
             !format!("{:?}", err).contains("hunter2"),

@@ -7,7 +7,10 @@ use crate::{
     manifest::Manifest,
     object::{Object, ObjectEntry, Renderable, RenderedObject, RenderedObjectMap},
     object_definition::{ObjectDefinition, ObjectDefinitions},
-    page::{build_context, Page, RenderGlobals, TemplateType},
+    page::{
+        build_context, ContextDep, ContextReads, ContextSignatures, Page, RenderGlobals,
+        TemplateType,
+    },
     read_toml::read_toml,
     tags::layout,
     util::path_to_slash,
@@ -101,6 +104,59 @@ pub struct WritePlan {
     deletes: Vec<PathBuf>,
 }
 
+/// What one page's last render depended on. A render reads nothing but its own
+/// template, the shared partials and the context, so a page whose inputs all sign
+/// the same renders identically and need not run again.
+#[derive(Debug)]
+struct RenderRecord {
+    partials: u64,
+    template: u64,
+    /// The object a template page renders over; zero for a page without one.
+    overlay: u64,
+    deps: Vec<(ContextDep, u64)>,
+    output: u64,
+}
+
+impl RenderRecord {
+    /// `build_cache` is consulted rather than trusted: this cache says what a render
+    /// would produce, and only the build cache says what is actually on disk.
+    fn reusable(
+        &self,
+        partials: u64,
+        template: u64,
+        overlay: u64,
+        signatures: &ContextSignatures,
+        build_cache: &RwLock<HashMap<PathBuf, u64>>,
+        path: &PathBuf,
+    ) -> bool {
+        self.partials == partials
+            && self.template == template
+            && self.overlay == overlay
+            && build_cache.read().unwrap().get(path) == Some(&self.output)
+            && self
+                .deps
+                .iter()
+                .all(|(dep, signed)| signatures.of(dep) == Some(*signed))
+    }
+}
+
+fn signed_reads(
+    reads: ContextReads,
+    signatures: &ContextSignatures,
+) -> Option<Vec<(ContextDep, u64)>> {
+    reads
+        .take()
+        .into_iter()
+        .map(|dep| signatures.of(&dep).map(|signed| (dep, signed)))
+        .collect()
+}
+
+fn hash_source(source: &str) -> u64 {
+    let mut hasher = SeaHasher::new();
+    hasher.write(source.as_bytes());
+    hasher.finish()
+}
+
 impl WritePlan {
     /// Files this plan accounts for, whether or not it writes them.
     fn visited(&self) -> HashSet<&PathBuf> {
@@ -127,6 +183,12 @@ impl WritePlan {
             self.dirs.push(dir);
         }
         self.writes.push((path, contents, hash));
+    }
+
+    /// Accounts for a page whose inputs are unchanged, so it was never rendered.
+    /// The caller has already established that `cache` holds `hash` for `path`.
+    fn record_reused(&mut self, path: PathBuf, hash: u64) {
+        self.unchanged.push((path, hash));
     }
 
     /// Everything previously written that this plan did not account for.
@@ -188,6 +250,8 @@ pub struct Site {
     cache_generation: AtomicU64,
     #[serde(skip)]
     parser_cache: RwLock<Option<ParserCache>>,
+    #[serde(skip)]
+    render_cache: RwLock<HashMap<PathBuf, RenderRecord>>,
 }
 
 // Site is shared across threads (e.g. the dev server); keep it Send + Sync
@@ -283,6 +347,7 @@ impl Site {
             build_cache: RwLock::new(HashMap::new()),
             cache_generation: AtomicU64::new(0),
             parser_cache: RwLock::new(None),
+            render_cache: RwLock::new(HashMap::new()),
         })
     }
 
@@ -293,13 +358,13 @@ impl Site {
         pages_dir: &Path,
         layout_dir: Option<&Path>,
         fs: &T,
-    ) -> Result<std::sync::Arc<liquid::Parser>> {
+    ) -> Result<(std::sync::Arc<liquid::Parser>, u64)> {
         let _span = trace_span!("get_or_build_parser").entered();
         let (source, partials_hash) =
             liquid_parser::partials_hash(Some(pages_dir), layout_dir, fs)?;
         if let Some(cache) = self.parser_cache.read().unwrap().as_ref() {
             if cache.partials_hash == partials_hash {
-                return Ok(cache.parser.clone());
+                return Ok((cache.parser.clone(), partials_hash));
             }
         }
         let parser = std::sync::Arc::new(liquid_parser::build_with_partials(source)?);
@@ -308,7 +373,7 @@ impl Site {
             parser: parser.clone(),
             templates: HashMap::new(),
         });
-        Ok(parser)
+        Ok((parser, partials_hash))
     }
 
     /// Parses `source` with `parser`, reusing a previously parsed template for
@@ -778,7 +843,7 @@ impl Site {
 
         let all_objects = self.get_objects_at(fs, generation)?;
 
-        let liquid_parser = self.get_or_build_parser(
+        let (liquid_parser, partials_hash) = self.get_or_build_parser(
             pages_dir,
             if fs.exists(layout_dir)? {
                 Some(layout_dir)
@@ -791,7 +856,7 @@ impl Site {
         // Build the shared render context once; it is identical for every
         // page and converting objects to liquid values (including rendering
         // markdown) is the expensive part of a render.
-        let base_context = build_context(
+        let (base_context, signatures) = build_context(
             &all_objects,
             &self.object_definitions,
             &self.field_config,
@@ -850,25 +915,27 @@ impl Site {
                         for object in t_objects.into_iter() {
                             #[cfg(feature = "verbose-logging")]
                             debug!("rendering {}", object.filename);
-                            let result = Self::plan_template_page(
-                                object,
-                                object_def,
-                                &parsed_template,
-                                &template_path,
-                                build_dir,
-                                &self.field_config,
-                                &base_context,
-                                &liquid_parser,
-                                &self.build_cache,
-                                &mut plan,
-                            )
-                            .map_err(|error| {
-                                BuildError::TemplateRenderError(
-                                    object.filename.to_string(),
-                                    template.to_string(),
-                                    error.to_string(),
+                            let result = self
+                                .plan_template_page(
+                                    object,
+                                    object_def,
+                                    &parsed_template,
+                                    &template_path,
+                                    hash_source(&template_str),
+                                    partials_hash,
+                                    build_dir,
+                                    &base_context,
+                                    &signatures,
+                                    &liquid_parser,
+                                    &mut plan,
                                 )
-                            });
+                                .map_err(|error| {
+                                    BuildError::TemplateRenderError(
+                                        object.filename.to_string(),
+                                        template.to_string(),
+                                        error.to_string(),
+                                    )
+                                });
                             if let Err(e) = &result {
                                 warn!("failed rendering {}: {e}", template_path.display());
                                 eprintln!("failed rendering {}: {e}", template_path.display());
@@ -917,8 +984,10 @@ impl Site {
                             &file_path,
                             page_name,
                             page_type,
+                            partials_hash,
                             build_dir,
                             &base_context,
+                            &signatures,
                             fs,
                             &liquid_parser,
                             &mut plan,
@@ -942,18 +1011,20 @@ impl Site {
         Ok(plan)
     }
 
-    #[instrument(skip(template, base_context, liquid_parser, plan))]
+    #[instrument(skip(self, template, base_context, signatures, liquid_parser, plan))]
     #[allow(clippy::too_many_arguments)]
     fn plan_template_page(
+        &self,
         object: &Object,
         object_def: &ObjectDefinition,
         template: &liquid::Template,
         template_path: &PathBuf,
+        template_hash: u64,
+        partials_hash: u64,
         build_dir: &Path,
-        field_config: &FieldConfig,
         base_context: &liquid::Object,
+        signatures: &ContextSignatures,
         liquid_parser: &liquid::Parser,
-        build_cache: &RwLock<HashMap<PathBuf, u64>>,
         plan: &mut WritePlan,
     ) -> Result<PathBuf> {
         let page = Page::new_with_parsed_template(
@@ -966,17 +1037,46 @@ impl Site {
                 .1,
             template_path,
         );
-        let render_o = page.render(liquid_parser, base_context, field_config);
+        let render_name = format!("{}.{}", object.filename, page.extension());
+        let t_dir = build_dir.join(&object_def.name);
+        let build_path = t_dir.join(render_name);
+        let overlay = signatures
+            .object(&object_def.name, &object.filename)
+            .unwrap_or_default();
+        if let Some(record) = self.render_cache.read().unwrap().get(&build_path) {
+            if record.reusable(
+                partials_hash,
+                template_hash,
+                overlay,
+                signatures,
+                &self.build_cache,
+                &build_path,
+            ) {
+                plan.record_reused(build_path.clone(), record.output);
+                return Ok(build_path);
+            }
+        }
+        let reads = ContextReads::default();
+        let render_o = page.render(liquid_parser, base_context, &self.field_config, &reads);
         if render_o.is_err() {
             warn!("failed rendering {}", object.filename);
         }
         let rendered = layout::post_process(render_o?);
-        let render_name = format!("{}.{}", object.filename, page.extension());
-        let t_dir = build_dir.join(&object_def.name);
-        let build_path = t_dir.join(render_name);
         let hash = hash_file(rendered.as_bytes());
+        if let Some(deps) = signed_reads(reads, signatures) {
+            self.render_cache.write().unwrap().insert(
+                build_path.clone(),
+                RenderRecord {
+                    partials: partials_hash,
+                    template: template_hash,
+                    overlay,
+                    deps,
+                    output: hash,
+                },
+            );
+        }
         plan.record(
-            build_cache,
+            &self.build_cache,
             Some(t_dir),
             build_path.clone(),
             rendered.into_bytes(),
@@ -985,7 +1085,7 @@ impl Site {
         Ok(build_path)
     }
 
-    #[instrument(skip(self, base_context, fs, liquid_parser, plan))]
+    #[instrument(skip(self, base_context, signatures, fs, liquid_parser, plan))]
     #[allow(clippy::too_many_arguments)]
     fn plan_page<T: FileSystemAPI>(
         &self,
@@ -993,8 +1093,10 @@ impl Site {
         file_path: &PathBuf,
         page_name: &str,
         page_type: TemplateType,
+        partials_hash: u64,
         build_dir: &Path,
         base_context: &liquid::Object,
+        signatures: &ContextSignatures,
         fs: &T,
         liquid_parser: &liquid::Parser,
         plan: &mut WritePlan,
@@ -1004,18 +1106,6 @@ impl Site {
             warn!("page not found: {}", file_path.display());
             return Ok(None);
         };
-        let template = self.get_or_parse_template(liquid_parser, &template_str)?;
-        let page = Page::new_with_parsed_content(
-            page_name.to_string(),
-            &template,
-            TemplateType::Default,
-            file_path,
-        );
-        let render_o = page.render(liquid_parser, base_context, field_config);
-        if render_o.is_err() {
-            warn!("failed rendering {}", file_path.display());
-        }
-        let rendered = layout::post_process(render_o?);
         let mut render_dir = build_dir.to_path_buf();
         let mut nested_dir = None;
         if let Some(parent_dir) = rel_path.parent() {
@@ -1023,7 +1113,46 @@ impl Site {
             nested_dir = Some(render_dir.clone());
         }
         let render_path = render_dir.join(format!("{}.{}", page_name, page_type.extension()));
+        let template_hash = hash_source(&template_str);
+        if let Some(record) = self.render_cache.read().unwrap().get(&render_path) {
+            if record.reusable(
+                partials_hash,
+                template_hash,
+                0,
+                signatures,
+                &self.build_cache,
+                &render_path,
+            ) {
+                plan.record_reused(render_path.clone(), record.output);
+                return Ok(Some(render_path));
+            }
+        }
+        let template = self.get_or_parse_template(liquid_parser, &template_str)?;
+        let page = Page::new_with_parsed_content(
+            page_name.to_string(),
+            &template,
+            TemplateType::Default,
+            file_path,
+        );
+        let reads = ContextReads::default();
+        let render_o = page.render(liquid_parser, base_context, field_config, &reads);
+        if render_o.is_err() {
+            warn!("failed rendering {}", file_path.display());
+        }
+        let rendered = layout::post_process(render_o?);
         let hash = hash_file(rendered.as_bytes());
+        if let Some(deps) = signed_reads(reads, signatures) {
+            self.render_cache.write().unwrap().insert(
+                render_path.clone(),
+                RenderRecord {
+                    partials: partials_hash,
+                    template: template_hash,
+                    overlay: 0,
+                    deps,
+                    output: hash,
+                },
+            );
+        }
         plan.record(
             &self.build_cache,
             nested_dir,
@@ -1449,5 +1578,165 @@ mod tests {
         };
         assert_eq!(object.url_path(), "post/a-post");
         assert_eq!(path_to_slash(object.path()), "post/a-post");
+    }
+}
+
+#[cfg(test)]
+mod incremental_render {
+    use crate::{Archival, BuildOptions, FileSystemAPI, MemoryFileSystem};
+    use std::path::Path;
+
+    /// Two articles, a per-article template page, an index that embeds both, and a
+    /// layout that reads the `site` object - so every kind of dependency a page can
+    /// have on the shared context is represented.
+    fn site() -> MemoryFileSystem {
+        let mut fs = MemoryFileSystem::default();
+        fs.write_str("archival.toml", "upload_prefix = \"\"\n".to_string())
+            .unwrap();
+        fs.write_str(
+            "archival_objects.toml",
+            "[site]\nname = \"string\"\n\n[articles]\ntemplate = \"article\"\nheadline = \"string\"\n"
+                .to_string(),
+        )
+        .unwrap();
+        fs.write_str("objects/site.toml", "name = \"First\"\n".to_string())
+            .unwrap();
+        for (index, headline) in ["One", "Two"].iter().enumerate() {
+            fs.write_str(
+                format!("objects/articles/article-{index}.toml"),
+                format!("headline = \"{headline}\"\norder = {index}\n"),
+            )
+            .unwrap();
+        }
+        fs.write_str(
+            "pages/article.liquid",
+            "{% layout 'theme' %}<h1>{{ articles.headline }}</h1>\n".to_string(),
+        )
+        .unwrap();
+        fs.write_str(
+            "pages/index.liquid",
+            "{% layout 'theme' %}{% for a in articles %}<li>{{ a.headline }}</li>{% endfor %}\n"
+                .to_string(),
+        )
+        .unwrap();
+        fs.write_str(
+            "layout/theme.liquid",
+            "<html><title>{{ objects.site.name }}</title>{{ page_content }}</html>\n".to_string(),
+        )
+        .unwrap();
+        fs
+    }
+
+    fn built(archival: &Archival<MemoryFileSystem>, path: &str) -> String {
+        archival.fs_read_file(path).unwrap()
+    }
+
+    fn rewrite(archival: &Archival<MemoryFileSystem>, path: &str, contents: &str) {
+        archival.fs_write_file(path, contents.to_string()).unwrap();
+        archival.site.invalidate_file(Path::new(path));
+    }
+
+    /// The page whose object changed picks the change up, and so does the index that
+    /// reads every article - while the untouched article's page keeps its content.
+    #[test]
+    fn an_object_edit_reaches_every_page_that_reads_it() {
+        let archival = Archival::new(site()).unwrap();
+        archival.build(BuildOptions::default()).unwrap();
+        assert!(built(&archival, "dist/articles/article-1.html").contains("Two"));
+
+        rewrite(
+            &archival,
+            "objects/articles/article-1.toml",
+            "headline = \"Rewritten\"\norder = 1\n",
+        );
+        archival.build(BuildOptions::default()).unwrap();
+
+        assert!(built(&archival, "dist/articles/article-1.html").contains("Rewritten"));
+        assert!(built(&archival, "dist/index.html").contains("Rewritten"));
+        assert!(built(&archival, "dist/articles/article-0.html").contains("One"));
+    }
+
+    /// The layout reads `objects.site`, so every page depends on it even though no
+    /// page names it directly.
+    #[test]
+    fn an_edit_to_an_object_the_layout_reads_reaches_every_page() {
+        let archival = Archival::new(site()).unwrap();
+        archival.build(BuildOptions::default()).unwrap();
+
+        rewrite(&archival, "objects/site.toml", "name = \"Renamed\"\n");
+        archival.build(BuildOptions::default()).unwrap();
+
+        for page in [
+            "dist/index.html",
+            "dist/articles/article-0.html",
+            "dist/articles/article-1.html",
+        ] {
+            assert!(
+                built(&archival, page).contains("Renamed"),
+                "{page} kept a stale layout"
+            );
+        }
+    }
+
+    /// A layout is a partial rather than a context read, so it is the parser's hash
+    /// that has to invalidate every page.
+    #[test]
+    fn a_layout_edit_reaches_every_page() {
+        let archival = Archival::new(site()).unwrap();
+        archival.build(BuildOptions::default()).unwrap();
+
+        rewrite(
+            &archival,
+            "layout/theme.liquid",
+            "<html><title>{{ objects.site.name }}</title><main>{{ page_content }}</main></html>\n",
+        );
+        archival.build(BuildOptions::default()).unwrap();
+
+        for page in [
+            "dist/index.html",
+            "dist/articles/article-0.html",
+            "dist/articles/article-1.html",
+        ] {
+            assert!(
+                built(&archival, page).contains("<main>"),
+                "{page} kept a stale layout"
+            );
+        }
+    }
+
+    /// A template edit changes every page rendered through it, and nothing else.
+    #[test]
+    fn a_template_edit_reaches_the_pages_rendered_through_it() {
+        let archival = Archival::new(site()).unwrap();
+        archival.build(BuildOptions::default()).unwrap();
+
+        rewrite(
+            &archival,
+            "pages/article.liquid",
+            "{% layout 'theme' %}<h2>{{ articles.headline }}</h2>\n",
+        );
+        archival.build(BuildOptions::default()).unwrap();
+
+        assert!(built(&archival, "dist/articles/article-0.html").contains("<h2>One</h2>"));
+        assert!(built(&archival, "dist/articles/article-1.html").contains("<h2>Two</h2>"));
+    }
+
+    /// Rebuilding with nothing changed leaves every page exactly as it was.
+    #[test]
+    fn an_idle_rebuild_changes_nothing() {
+        let archival = Archival::new(site()).unwrap();
+        archival.build(BuildOptions::default()).unwrap();
+        let before: Vec<String> = ["dist/index.html", "dist/articles/article-0.html"]
+            .iter()
+            .map(|p| built(&archival, p))
+            .collect();
+
+        archival.build(BuildOptions::default()).unwrap();
+
+        let after: Vec<String> = ["dist/index.html", "dist/articles/article-0.html"]
+            .iter()
+            .map(|p| built(&archival, p))
+            .collect();
+        assert_eq!(before, after);
     }
 }
