@@ -1,0 +1,4 @@
+# Paths are dot separated names, so a doubled separator addresses a list with no
+# name and resolves to nothing.
+[[shortcuts]]
+path = "post..links"

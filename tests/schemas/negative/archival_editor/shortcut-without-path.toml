@@ -1,0 +1,4 @@
+# ShortcutConfig::path is not an Option: a shortcut that names no list has
+# nothing to create.
+[[shortcuts]]
+name = "New Post"

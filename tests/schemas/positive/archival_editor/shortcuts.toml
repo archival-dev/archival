@@ -1,0 +1,17 @@
+# `shortcuts` is reserved at the top level, alongside the object names.
+[[shortcuts]]
+name = "New Post"
+path = "post"
+
+# Unnamed, so the editor labels it after the last name in the path.
+[[shortcuts]]
+path = "homepage.field_notes"
+
+# A list object's address carries the filename it lives in, then the route down
+# to the list, indexed wherever it passes through one.
+[[shortcuts]]
+path = "post.a-post.sections.1.links"
+
+[[post.views]]
+name = "default"
+primary = "title"

@@ -2,8 +2,17 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://archival.dev/schemas/archival_editor.schema.json",
   "title": "Archival editor configuration",
-  "description": "Per-object configuration for the archival editor, read from archival_editor.toml at the site root. Keys are object names from archival_objects.toml.",
+  "description": "Per-object configuration for the archival editor, read from archival_editor.toml at the site root. Keys are object names from archival_objects.toml, except `shortcuts`, which is reserved.",
   "type": "object",
+  "properties": {
+    "shortcuts": {
+      "description": "the entries offered by the editor's shortcut button, each creating a draft in one list. Reserved: an object of this name cannot be configured here.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/shortcutConfig"
+      }
+    }
+  },
   "additionalProperties": {
     "$ref": "#/definitions/objectConfig"
   },
@@ -49,6 +58,23 @@
         "tertiary": {
           "description": "an optional field shown as this view's tertiary content",
           "type": "string"
+        }
+      }
+    },
+    "shortcutConfig": {
+      "description": "a shortcut offered by the editor's shortcut button: the list a new entry is created in, and what to call it",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "name": {
+          "description": "the label shown on this shortcut. Defaults to the last name in `path`.",
+          "type": "string"
+        },
+        "path": {
+          "description": "the list an entry created here joins, written as dot separated names: an object name from archival_objects.toml, then that object's filename where the object is a list rather than a single file, then the child field names leading down to the list, with an index wherever the route passes through one.",
+          "type": "string",
+          "pattern": "^[^.]+(\\.[^.]+)*$"
         }
       }
     }

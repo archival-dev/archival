@@ -1,0 +1,5 @@
+# `label` is dropped silently by serde, leaving a shortcut named after its path
+# rather than what the author wrote.
+[[shortcuts]]
+label = "New Post"
+path = "post"
