@@ -43,8 +43,24 @@ impl<F: FileSystemAPI + Clone + Debug> Archival<F> {
                 .ok_or_else(|| ArchivalError::new("file not found"))?)
         })
     }
+    pub fn fs_read_bytes(&self, path: impl AsRef<Path>) -> Result<Option<Vec<u8>>> {
+        self.fs_mutex.with_fs(|fs| match fs.read(path) {
+            // NativeFileSystem reports a missing file as an io error rather than None.
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                Ok(None)
+            }
+            read => read,
+        })
+    }
     pub fn fs_write_file(&self, path: impl AsRef<Path>, contents: String) -> Result<()> {
         self.fs_mutex.with_fs(|fs| fs.write_str(path, contents))
+    }
+    pub fn fs_write_bytes(&self, path: impl AsRef<Path>, contents: Vec<u8>) -> Result<()> {
+        self.fs_mutex.with_fs(|fs| fs.write(path, contents))
     }
     pub fn fs_delete_file(&self, path: impl AsRef<Path>) -> Result<()> {
         self.fs_mutex.with_fs(|fs| fs.delete(path))
@@ -216,6 +232,36 @@ mod lib_fs_stdlib {
 
         Ok(())
     }
+
+    #[test]
+    fn read_bytes_of_binary_file() -> anyhow::Result<()> {
+        let archival = archival_for_fixture_site()?;
+        let expected = fs::read("tests/fixtures/website/public/icon.png")?;
+        assert_eq!(archival.fs_read_bytes("public/icon.png")?, Some(expected));
+        assert!(archival.fs_read_file("public/icon.png").is_err());
+        assert_eq!(archival.fs_read_bytes("public/missing.png")?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn write_then_rename_then_read_bytes() -> anyhow::Result<()> {
+        let archival = archival_for_fixture_site()?;
+        let original_path = Path::new("public/fonts/fs_api_source.woff2");
+        let renamed_path = Path::new("public/fonts/fs_api_target.woff2");
+        let contents = vec![0x77, 0x4f, 0x46, 0x32, 0xff, 0xfe, 0x00, 0x80];
+
+        archival.fs_write_bytes(original_path, contents.clone())?;
+        assert_eq!(
+            archival.fs_read_bytes(original_path)?,
+            Some(contents.clone())
+        );
+        assert!(archival.fs_read_file(original_path).is_err());
+        archival.fs_rename_file(original_path, renamed_path)?;
+        assert_eq!(archival.fs_read_bytes(original_path)?, None);
+        assert_eq!(archival.fs_read_bytes(renamed_path)?, Some(contents));
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -226,7 +272,7 @@ mod lib_fs_memory {
         path::{Path, PathBuf},
     };
 
-    use crate::{Archival, FileSystemAPI, MemoryFileSystem};
+    use crate::{Archival, BuildOptions, FileSystemAPI, MemoryFileSystem};
 
     fn load_fixture_site_into_memory(
         fs_mem: &mut MemoryFileSystem,
@@ -383,6 +429,53 @@ mod lib_fs_memory {
         assert!(archival.fs_read_file(original_path).is_err());
         assert_eq!(archival.fs_read_file(renamed_path)?, contents);
 
+        Ok(())
+    }
+
+    #[test]
+    fn read_bytes_of_binary_file() -> anyhow::Result<()> {
+        let archival = archival_for_fixture_site()?;
+        let expected = fs::read("tests/fixtures/website/public/icon.png")?;
+        assert_eq!(archival.fs_read_bytes("public/icon.png")?, Some(expected));
+        assert!(archival.fs_read_file("public/icon.png").is_err());
+        assert_eq!(archival.fs_read_bytes("public/missing.png")?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn write_then_rename_then_read_bytes() -> anyhow::Result<()> {
+        let archival = archival_for_fixture_site()?;
+        let original_path = Path::new("public/fonts/fs_api_source.woff2");
+        let renamed_path = Path::new("public/fonts/fs_api_target.woff2");
+        let contents = vec![0x77, 0x4f, 0x46, 0x32, 0xff, 0xfe, 0x00, 0x80];
+
+        archival.fs_write_bytes(original_path, contents.clone())?;
+        assert_eq!(
+            archival.fs_read_bytes(original_path)?,
+            Some(contents.clone())
+        );
+        assert!(archival.fs_read_file(original_path).is_err());
+        archival.fs_rename_file(original_path, renamed_path)?;
+        assert_eq!(archival.fs_read_bytes(original_path)?, None);
+        assert_eq!(archival.fs_read_bytes(renamed_path)?, Some(contents));
+
+        Ok(())
+    }
+
+    #[test]
+    fn built_static_file_keeps_written_bytes() -> anyhow::Result<()> {
+        let archival = archival_for_fixture_site()?;
+        let contents = vec![0x77, 0x4f, 0x46, 0x32, 0xff, 0xfe, 0x00, 0x80];
+        archival.fs_write_bytes("public/fonts/fs_api_built.woff2", contents.clone())?;
+
+        archival.build(BuildOptions::default())?;
+
+        let built = archival
+            .dist_files()
+            .into_iter()
+            .find(|file| file.path.ends_with("fonts/fs_api_built.woff2"))
+            .expect("the static file is in the build");
+        assert_eq!(built.data, contents);
         Ok(())
     }
 }
