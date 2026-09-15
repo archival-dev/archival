@@ -57,16 +57,33 @@ impl<F: FileSystemAPI + Clone + Debug> Archival<F> {
         })
     }
     pub fn fs_write_file(&self, path: impl AsRef<Path>, contents: String) -> Result<()> {
-        self.fs_mutex.with_fs(|fs| fs.write_str(path, contents))
+        self.fs_mutex.with_fs(|fs| {
+            fs.write_str(&path, contents)?;
+            self.site.invalidate_file(path.as_ref());
+            Ok(())
+        })
     }
     pub fn fs_write_bytes(&self, path: impl AsRef<Path>, contents: Vec<u8>) -> Result<()> {
-        self.fs_mutex.with_fs(|fs| fs.write(path, contents))
+        self.fs_mutex.with_fs(|fs| {
+            fs.write(&path, contents)?;
+            self.site.invalidate_file(path.as_ref());
+            Ok(())
+        })
     }
     pub fn fs_delete_file(&self, path: impl AsRef<Path>) -> Result<()> {
-        self.fs_mutex.with_fs(|fs| fs.delete(path))
+        self.fs_mutex.with_fs(|fs| {
+            fs.delete(&path)?;
+            self.site.invalidate_file(path.as_ref());
+            Ok(())
+        })
     }
     pub fn fs_rename_file(&self, from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()> {
-        self.fs_mutex.with_fs(|fs| fs.rename(from, to))
+        self.fs_mutex.with_fs(|fs| {
+            fs.rename(&from, &to)?;
+            self.site.invalidate_file(from.as_ref());
+            self.site.invalidate_file(to.as_ref());
+            Ok(())
+        })
     }
 }
 
@@ -272,7 +289,10 @@ mod lib_fs_memory {
         path::{Path, PathBuf},
     };
 
-    use crate::{Archival, BuildOptions, FileSystemAPI, MemoryFileSystem};
+    use crate::{
+        constants::OBJECT_DEFINITION_FILE_NAME, Archival, BuildOptions, FileSystemAPI,
+        MemoryFileSystem,
+    };
 
     fn load_fixture_site_into_memory(
         fs_mem: &mut MemoryFileSystem,
@@ -476,6 +496,34 @@ mod lib_fs_memory {
             .find(|file| file.path.ends_with("fonts/fs_api_built.woff2"))
             .expect("the static file is in the build");
         assert_eq!(built.data, contents);
+        Ok(())
+    }
+
+    #[test]
+    fn static_file_replacing_a_deleted_page_is_built() -> anyhow::Result<()> {
+        let mut fs = MemoryFileSystem::default();
+        fs.write_str(
+            Path::new(OBJECT_DEFINITION_FILE_NAME),
+            "[post]\nname = \"string\"\n".to_string(),
+        )?;
+        fs.write_str(
+            Path::new("objects/post/a-post.toml"),
+            "name = \"A Post\"\n".to_string(),
+        )?;
+        fs.write_str(Path::new("pages/index.liquid"), "page\n".to_string())?;
+        fs.write_str(Path::new("pages/about.liquid"), "about\n".to_string())?;
+        let archival = Archival::new_with_upload_prefix(fs, "test")?;
+        let built = archival.site.manifest.build_dir.join("index.html");
+
+        archival.build(BuildOptions::default())?;
+        assert_eq!(archival.fs_read_file(&built)?.trim(), "page");
+
+        archival.fs_delete_file("pages/index.liquid")?;
+        let contents = b"<p>static</p>".to_vec();
+        archival.fs_write_bytes("public/index.html", contents.clone())?;
+        archival.build(BuildOptions::default())?;
+
+        assert_eq!(archival.fs_read_bytes(&built)?, Some(contents));
         Ok(())
     }
 }
