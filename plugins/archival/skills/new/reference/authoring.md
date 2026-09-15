@@ -182,9 +182,11 @@ local.
 - **Field values render as Liquid.** A literal `{{` in content needs escaping —
   except inside markdown code, where a span or a fenced or indented block is
   written out exactly as authored.
-- **A page may render twice.** If output still contains Liquid after the first
-  pass, archival renders again — so a bare `{% raw %}` does not survive into
-  output.
+- **Only one extra level renders.** A value's Liquid renders against the page's
+  runtime, but Liquid that value *produces* is written out literally — so a
+  field referring to itself terminates rather than looping. `{% raw %}` behaves
+  as it does anywhere else; archival no longer renders a finished page a second
+  time.
 - **`layout/` is singular**, and the build dir is `dist`, the static dir
   `public`. Don't guess these from other generators.
 - **Everything in `public/` is copied verbatim**, preserving subpaths, so
