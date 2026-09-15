@@ -218,19 +218,39 @@ impl WritePlan {
         fs: &mut T,
         cache: &RwLock<HashMap<PathBuf, u64>>,
     ) -> Result<()> {
+        self.apply_beneath(fs, cache, &RwLock::default())
+    }
+
+    /// Like [WritePlan::apply], but a path `above` holds belongs to whatever wrote it:
+    /// this plan leaves it as it is on disk and drops it from `cache`.
+    pub(crate) fn apply_beneath<T: FileSystemAPI>(
+        self,
+        fs: &mut T,
+        cache: &RwLock<HashMap<PathBuf, u64>>,
+        above: &RwLock<HashMap<PathBuf, u64>>,
+    ) -> Result<()> {
         for dir in &self.dirs {
             fs.create_dir_all(dir)?;
         }
+        let above = above.read().unwrap();
         let mut cache = cache.write().unwrap();
         for (path, contents, hash) in self.writes {
+            if above.contains_key(&path) {
+                cache.remove(&path);
+                continue;
+            }
             fs.write(&path, contents)?;
             cache.insert(path, hash);
         }
         for (path, hash) in self.unchanged {
-            cache.insert(path, hash);
+            if above.contains_key(&path) {
+                cache.remove(&path);
+            } else {
+                cache.insert(path, hash);
+            }
         }
         for path in self.deletes {
-            if fs.exists(&path)? {
+            if !above.contains_key(&path) && fs.exists(&path)? {
                 match fs.delete(&path) {
                     Err(e) if !is_not_found(&e) => return Err(e),
                     _ => {}
@@ -807,10 +827,12 @@ impl Site {
         Ok(plan)
     }
 
+    /// A static file takes precedence over a page built to the same path, so static
+    /// files must be synced before the build is applied.
     #[instrument(skip(fs))]
     pub fn build<T: FileSystemAPI>(&self, fs: &mut T, options: BuildOptions) -> Result<()> {
         let plan = self.plan_build(&*fs, options, self.objects_generation())?;
-        plan.apply(fs, &self.build_cache)
+        plan.apply_beneath(fs, &self.build_cache, &self.static_file_cache)
     }
 
     /// Resolves a build to the filesystem mutations it implies, without performing any
@@ -1504,6 +1526,51 @@ mod tests {
             !fs.exists(&copied)?,
             "removed static file was left behind in the build"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn a_static_file_shadows_a_page_built_to_the_same_path() -> Result<()> {
+        let mut fs = MemoryFileSystem::default();
+        fs.write_str(
+            Path::new(OBJECT_DEFINITION_FILE_NAME),
+            "[post]\nname = \"string\"\n".to_string(),
+        )?;
+        fs.write_str(
+            Path::new("objects/post/a-post.toml"),
+            "name = \"A Post\"\n".to_string(),
+        )?;
+        let page = Path::new("pages/index.liquid");
+        let static_file = Path::new("public/index.html");
+        fs.write_str(page, "page\n".to_string())?;
+        fs.write_str(Path::new("pages/about.liquid"), "about\n".to_string())?;
+        fs.write_str(static_file, "static\n".to_string())?;
+        let site = Site::load(&fs, Some("test"))?;
+        let built = site.manifest.build_dir.join("index.html");
+        let build = |fs: &mut MemoryFileSystem| -> Result<Option<String>> {
+            site.sync_static_files(fs)?;
+            site.build(fs, BuildOptions::default())?;
+            Ok(fs.read_to_string(&built)?.map(|s| s.trim().to_string()))
+        };
+
+        assert_eq!(build(&mut fs)?.as_deref(), Some("static"));
+        assert_eq!(build(&mut fs)?.as_deref(), Some("static"));
+
+        fs.delete(static_file)?;
+        assert_eq!(
+            build(&mut fs)?.as_deref(),
+            Some("page"),
+            "the page did not reclaim its output from the removed static file"
+        );
+
+        fs.write_str(static_file, "static\n".to_string())?;
+        fs.delete(page)?;
+        assert_eq!(
+            build(&mut fs)?.as_deref(),
+            Some("static"),
+            "a deleted page's output removed the static file built to its path"
+        );
+        assert_eq!(build(&mut fs)?.as_deref(), Some("static"));
         Ok(())
     }
 

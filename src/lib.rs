@@ -239,7 +239,7 @@ impl<F: FileSystemAPI + Clone + Debug> Archival<F> {
                     if let Some(statics) = statics {
                         statics.apply(fs, self.site.static_file_cache())?;
                     }
-                    pages.apply(fs, self.site.build_cache())
+                    pages.apply_beneath(fs, self.site.build_cache(), self.site.static_file_cache())
                 })?;
             }
             None => self.fs_mutex.with_fs(|fs| {
@@ -250,7 +250,7 @@ impl<F: FileSystemAPI + Clone + Debug> Archival<F> {
                 let pages = self
                     .site
                     .plan_build(&*fs, options, self.site.objects_generation())?;
-                pages.apply(fs, self.site.build_cache())
+                pages.apply_beneath(fs, self.site.build_cache(), self.site.static_file_cache())
             })?,
         }
 
