@@ -24,6 +24,7 @@ mod site;
 mod tags;
 #[cfg(test)]
 mod test_utils;
+pub mod toml_comments;
 mod typescript_defs;
 mod util;
 mod value_path;

@@ -590,7 +590,12 @@ impl Site {
     ) -> Result<()> {
         modify(&mut self.manifest);
         let manifest_path = Manifest::path_in(Path::new(""), fs)?;
-        fs.write_str(manifest_path, self.manifest.to_toml()?)
+        let formatted = self.manifest.to_toml()?;
+        let contents = match fs.read_to_string(&manifest_path)? {
+            Some(original) => crate::toml_comments::preserve_comments(&original, &formatted),
+            None => formatted,
+        };
+        fs.write_str(manifest_path, contents)
     }
 
     pub fn manifest_content<T: FileSystemAPI>(&self, fs: &T) -> Result<String> {

@@ -6,6 +6,7 @@ use crate::{
     },
     file_system_stdlib,
     manifest::Manifest,
+    toml_comments::preserve_comments,
     Archival, ArchivalError, FileSystemAPI,
 };
 use anyhow::Result;
@@ -24,7 +25,11 @@ impl Archival<file_system_stdlib::NativeFileSystem> {
                     let def = definitions.get(obj_type).ok_or_else(|| {
                         ArchivalError::new(&format!("missing object definition: {obj_type}"))
                     })?;
-                    let contents = object.to_toml(def)?;
+                    let formatted = object.to_toml(def)?;
+                    let contents = match fs.read_to_string(&path)? {
+                        Some(original) => preserve_comments(&original, &formatted),
+                        None => formatted,
+                    };
                     fs.write_str(&path, contents)?;
                 }
             }
@@ -34,7 +39,12 @@ impl Archival<file_system_stdlib::NativeFileSystem> {
     fn format_manifest(&self) -> Result<()> {
         self.fs_mutex.with_fs(|fs| {
             let manifest_path = Manifest::path_in(Path::new(""), fs)?;
-            fs.write_str(manifest_path, self.site.manifest.to_toml()?)
+            let formatted = self.site.manifest.to_toml()?;
+            let contents = match fs.read_to_string(&manifest_path)? {
+                Some(original) => preserve_comments(&original, &formatted),
+                None => formatted,
+            };
+            fs.write_str(manifest_path, contents)
         })
     }
 }
