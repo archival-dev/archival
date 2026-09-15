@@ -1,3 +1,4 @@
+use crate::named_lookup::NamedLookup;
 use crate::tags::args::{binding_name, parse_binding, parse_vars_from, Binding};
 use liquid_core::error::ResultLiquidExt;
 use liquid_core::model::KString;
@@ -80,7 +81,7 @@ impl Include {
             .trace_with(|| format!("{{% include {} %}}", self.partial).into())?;
 
         partial
-            .render_to(writer, scope)
+            .render_to(writer, &NamedLookup::new(scope))
             .trace_with(|| format!("{{% include {} %}}", self.partial).into())
             .context_key_with(|| self.partial.to_string().into())
             .value_with(|| name.to_string().into())

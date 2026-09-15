@@ -1,15 +1,17 @@
 use crate::liquid_rewrite::rewrite_template;
+use crate::named_lookup::NamedLookup;
 use crate::tags::include::IncludeTag;
 use crate::tags::output::{OutputContext, OutputTag};
 use crate::tags::render::RenderTag;
 use crate::{page::TemplateType, tags::layout::LayoutTag, util::path_to_slash, FileSystemAPI};
 use anyhow::Result;
+use liquid_core::model::ObjectView;
 use liquid_core::partials::{EagerCompiler, PartialCompiler, PartialSource};
-use liquid_core::runtime::PartialStore;
+use liquid_core::runtime::{self, PartialStore, Renderable, RuntimeBuilder};
 use liquid_core::Language;
 use once_cell::sync::Lazy;
 use regex::Regex;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::{borrow::Cow, collections::HashMap, path::Path};
 #[cfg(feature = "verbose-logging")]
 use tracing::debug;
@@ -132,7 +134,7 @@ pub fn get(
     pages_path: Option<&Path>,
     layout_path: Option<&Path>,
     fs: &impl FileSystemAPI,
-) -> Result<liquid::Parser> {
+) -> Result<Parser> {
     let source = ArchivalPartialSource::new(pages_path, layout_path, fs)?;
     build_with_partials(source)
 }
@@ -150,8 +152,47 @@ pub(crate) fn partials_hash(
     Ok((source, hash))
 }
 
-pub(crate) fn build_with_partials(source: ArchivalPartialSource) -> Result<liquid::Parser> {
+pub(crate) fn build_with_partials(source: ArchivalPartialSource) -> Result<Parser> {
     Ok(build_with_output_context(source)?.0)
+}
+
+/// Stands in for `liquid::Parser`, whose templates can only be rendered with a
+/// runtime liquid builds, so they could not resolve objects by name (see
+/// `crate::named_lookup`).
+#[derive(Clone)]
+pub struct Parser {
+    language: Arc<Language>,
+    partials: Arc<dyn PartialStore + Send + Sync>,
+}
+
+impl Parser {
+    pub fn parse(&self, text: &str) -> std::result::Result<Template, liquid_core::Error> {
+        Ok(Template {
+            template: runtime::Template::new(liquid_core::parser::parse(text, &self.language)?),
+            partials: Arc::clone(&self.partials),
+        })
+    }
+}
+
+pub struct Template {
+    template: runtime::Template,
+    partials: Arc<dyn PartialStore + Send + Sync>,
+}
+
+impl Template {
+    pub fn render(
+        &self,
+        globals: &dyn ObjectView,
+    ) -> std::result::Result<String, liquid_core::Error> {
+        let runtime = RuntimeBuilder::new()
+            .set_globals(globals)
+            .set_partials(self.partials.as_ref())
+            .build();
+        let mut output = Vec::new();
+        self.template
+            .render_to(&mut output, &NamedLookup::new(&runtime))?;
+        String::from_utf8(output).map_err(|e| liquid_core::Error::with_msg(e.to_string()))
+    }
 }
 
 /// Also returns the parser's [`OutputContext`], whose lifetime is tied to the
@@ -159,50 +200,85 @@ pub(crate) fn build_with_partials(source: ArchivalPartialSource) -> Result<liqui
 /// cache of parsed field values is only valid for that `Language`.
 pub(crate) fn build_with_output_context(
     source: ArchivalPartialSource,
-) -> Result<(liquid::Parser, Arc<OutputContext>)> {
+) -> Result<(Parser, Arc<OutputContext>)> {
     let ctx = Arc::new(OutputContext::default());
-    let partials = LanguageCapturingCompiler {
+    let captured = Arc::new(OnceLock::new());
+    let partials = CapturingCompiler {
         inner: EagerCompiler::new(source),
         ctx: Arc::clone(&ctx),
+        captured: Arc::clone(&captured),
     };
-    let parser = liquid::ParserBuilder::with_stdlib()
+    liquid::ParserBuilder::with_stdlib()
         .tag(LayoutTag)
         .tag(IncludeTag)
         .tag(RenderTag)
         .tag(OutputTag::new(Arc::clone(&ctx)))
-        .partials(partials);
-    Ok((parser.build()?, ctx))
+        .partials(partials)
+        .build()?;
+    let parser = captured
+        .get()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("internal: liquid partials were not compiled"))?;
+    Ok((parser, ctx))
 }
 
 /// Parses a template, rewriting its output statements first so that liquid
 /// inside the values it renders is evaluated in place. Every liquid template
 /// archival parses should go through here.
 pub(crate) fn parse(
-    parser: &liquid::Parser,
+    parser: &Parser,
     source: &str,
-) -> std::result::Result<liquid::Template, liquid_core::Error> {
+) -> std::result::Result<Template, liquid_core::Error> {
     parser.parse(&rewrite_template(source))
 }
 
-/// A pass-through partial compiler whose only job is to capture the
-/// `Arc<Language>` that `ParserBuilder::build` hands to the compiler. That is
-/// the only way to get hold of it, and the output tag needs it in order to
-/// parse liquid found inside values.
-struct LanguageCapturingCompiler<C: PartialCompiler> {
+/// A pass-through partial compiler that captures the `Arc<Language>` that
+/// `ParserBuilder::build` hands to it, and the partials it compiles. That is
+/// the only way to get hold of either: the output tag needs the language to
+/// parse liquid found inside values, and [`Parser`] needs both.
+struct CapturingCompiler<C: PartialCompiler> {
     inner: C,
     ctx: Arc<OutputContext>,
+    captured: Arc<OnceLock<Parser>>,
 }
 
-impl<C: PartialCompiler> PartialCompiler for LanguageCapturingCompiler<C> {
+impl<C: PartialCompiler> PartialCompiler for CapturingCompiler<C> {
     fn compile(
         self,
         language: Arc<Language>,
     ) -> liquid_core::Result<Box<dyn PartialStore + Send + Sync>> {
         self.ctx.set_language(&language);
-        self.inner.compile(language)
+        let partials: Arc<dyn PartialStore + Send + Sync> =
+            self.inner.compile(Arc::clone(&language))?.into();
+        let _ = self.captured.set(Parser {
+            language,
+            partials: Arc::clone(&partials),
+        });
+        Ok(Box::new(SharedPartials(partials)))
     }
 
     fn source(&self) -> &dyn PartialSource {
         self.inner.source()
+    }
+}
+
+#[derive(Debug)]
+struct SharedPartials(Arc<dyn PartialStore + Send + Sync>);
+
+impl PartialStore for SharedPartials {
+    fn contains(&self, name: &str) -> bool {
+        self.0.contains(name)
+    }
+
+    fn names(&self) -> Vec<&str> {
+        self.0.names()
+    }
+
+    fn try_get(&self, name: &str) -> Option<Arc<dyn Renderable>> {
+        self.0.try_get(name)
+    }
+
+    fn get(&self, name: &str) -> liquid_core::Result<Arc<dyn Renderable>> {
+        self.0.get(name)
     }
 }

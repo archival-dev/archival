@@ -1,3 +1,4 @@
+use crate::named_lookup::NamedLookup;
 use crate::tags::args::parse_vars;
 use liquid_core::error::ResultLiquidExt;
 use liquid_core::model::KString;
@@ -125,7 +126,7 @@ impl Renderable for Layout {
                 .trace_with(|| format!("{{% layout {} %}}", self.partial).into())?;
 
             partial
-                .render_to(writer, &scope)
+                .render_to(writer, &NamedLookup::new(&scope))
                 .trace_with(|| format!("{{% layout {} %}}", self.partial).into())
                 .context_key_with(|| self.partial.to_string().into())
                 .value_with(|| name.to_string().into())?;

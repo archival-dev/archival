@@ -13,6 +13,7 @@ mod liquid_parser;
 mod liquid_rewrite;
 #[cfg(feature = "lsp")]
 mod lsp;
+mod named_lookup;
 mod object_definition;
 mod page;
 mod read_toml;

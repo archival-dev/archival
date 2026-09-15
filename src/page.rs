@@ -90,7 +90,7 @@ pub struct PageTemplate<'a> {
     /// A pre-parsed template. When set, `content` is not parsed again; this
     /// lets builds parse each template file once and share it across every
     /// object rendered with it.
-    pub parsed: Option<&'a liquid::Template>,
+    pub parsed: Option<&'a crate::liquid_parser::Template>,
     #[allow(dead_code)]
     pub file_type: TemplateType,
     pub debug_path: PathBuf,
@@ -125,7 +125,7 @@ pub struct Page<'a> {
     content: Option<String>,
     /// A pre-parsed template for `content`. When set, `content` is not parsed
     /// again; builds use this to share parsed page templates across builds.
-    content_parsed: Option<&'a liquid::Template>,
+    content_parsed: Option<&'a crate::liquid_parser::Template>,
     template: Option<PageTemplate<'a>>,
     file_type: TemplateType,
     pub debug_path: Option<PathBuf>,
@@ -612,7 +612,7 @@ impl<'a> Page<'a> {
         name: String,
         definition: &'a ObjectDefinition,
         object: &'a Object,
-        parsed: &'a liquid::Template,
+        parsed: &'a crate::liquid_parser::Template,
         file_type: TemplateType,
         template_debug_path: &Path,
     ) -> Page<'a> {
@@ -653,7 +653,7 @@ impl<'a> Page<'a> {
     }
     pub fn new_with_parsed_content(
         name: String,
-        parsed: &'a liquid::Template,
+        parsed: &'a crate::liquid_parser::Template,
         file_type: TemplateType,
         debug_path: &Path,
     ) -> Page<'a> {
@@ -668,7 +668,7 @@ impl<'a> Page<'a> {
     }
     pub fn render(
         &self,
-        parser: &liquid::Parser,
+        parser: &crate::liquid_parser::Parser,
         base_context: &liquid::Object,
         field_config: &FieldConfig,
         reads: &ContextReads,
@@ -1012,6 +1012,35 @@ here is a liquid variable: {{site_url}}
         );
         Ok(())
     }
+    #[test]
+    fn objects_are_addressable_by_name() -> Result<()> {
+        let liquid_parser = liquid_parser::get(None, None, &MemoryFileSystem::default())?;
+        let globals = RenderGlobals {
+            site_url: "https://foo.bar".into(),
+        };
+        let field_config = FieldConfig::default();
+        let (base_context, _signatures) = build_context(
+            &get_objects_map(),
+            &get_definition_map(),
+            &field_config,
+            &globals,
+        );
+        let page = Page::new(
+            "home".to_string(),
+            "{{ objects.c.home.name }}|{{ artists[\"tormenta-rey\"].name }}".to_string(),
+            TemplateType::Default,
+            Path::new("pages/home.liquid"),
+        );
+        let rendered = page.render(
+            &liquid_parser,
+            &base_context,
+            &field_config,
+            &ContextReads::default(),
+        )?;
+        assert_eq!(rendered, "home|Tormenta Rey");
+        Ok(())
+    }
+
     #[test]
     fn template_page() -> Result<()> {
         let globals = RenderGlobals {

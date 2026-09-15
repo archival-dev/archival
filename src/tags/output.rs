@@ -48,7 +48,7 @@ pub(crate) struct OutputContext {
     /// Weak on purpose: the `Language` owns this tag, which owns this cell, so
     /// holding an `Arc` would leak one `Language` per parser rebuild — and the
     /// dev server rebuilds the parser every time a partial changes. The
-    /// `Language` is kept alive by the `liquid::Parser`, which always outlives
+    /// `Language` is kept alive by the `liquid_parser::Parser`, which always outlives
     /// rendering of the templates it parsed.
     language: OnceLock<Weak<Language>>,
     nested: RwLock<HashMap<u64, Arc<runtime::Template>>>,

@@ -1,3 +1,4 @@
+use crate::named_lookup::NamedLookup;
 use crate::tags::args::{binding_name, parse_binding, parse_vars_from, Binding};
 use liquid_core::error::ResultLiquidExt;
 use liquid_core::model::{
@@ -294,7 +295,7 @@ impl Render {
         let partial = scope.partials().get(name).trace_with(|| self.trace())?;
 
         partial
-            .render_to(writer, scope)
+            .render_to(writer, &NamedLookup::new(scope))
             .trace_with(|| self.trace())
             .context_key_with(|| self.partial.to_string().into())
             .value_with(|| name.to_string().into())
@@ -387,6 +388,7 @@ mod test {
                 "loop",
                 "breaker",
                 "outer",
+                "menu",
             ]
         }
 
@@ -402,13 +404,19 @@ mod test {
                 "loop" => Some("{{forloop.index}}:{{item}} ".into()),
                 "breaker" => Some("{{item}}{% if item == 2 %}{% break %}{% endif %}".into()),
                 "outer" => Some("{% render 'global' %}".into()),
+                "menu" => Some("{{menus.main.title}}".into()),
                 _ => None,
             }
         }
     }
 
     fn globals() -> liquid::Object {
-        liquid::object!({ "site_url": "https://example.com", "items": [1, 2, 3], "product": { "name": "widget" } })
+        liquid::object!({
+            "site_url": "https://example.com",
+            "items": [1, 2, 3],
+            "product": { "name": "widget" },
+            "menus": [{ "path": "menus/main", "title": "Main" }],
+        })
     }
 
     fn render_with(tag_render: bool, template: &str, globals: &liquid::Object) -> Result<String> {
@@ -443,6 +451,11 @@ mod test {
             render("{% render 'outer' %}").unwrap(),
             "https://example.com"
         );
+    }
+
+    #[test]
+    fn globals_are_addressable_by_name() {
+        assert_eq!(render("{% render 'menu' %}").unwrap(), "Main");
     }
 
     #[test]

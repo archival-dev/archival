@@ -71,8 +71,8 @@ pub enum BuildError {
 /// templates together (as replacing this whole struct does) keeps that true.
 struct ParserCache {
     partials_hash: u64,
-    parser: std::sync::Arc<liquid::Parser>,
-    templates: HashMap<u64, std::sync::Arc<liquid::Template>>,
+    parser: std::sync::Arc<liquid_parser::Parser>,
+    templates: HashMap<u64, std::sync::Arc<liquid_parser::Template>>,
 }
 
 impl std::fmt::Debug for ParserCache {
@@ -366,7 +366,7 @@ impl Site {
         pages_dir: &Path,
         layout_dir: Option<&Path>,
         fs: &T,
-    ) -> Result<(std::sync::Arc<liquid::Parser>, u64)> {
+    ) -> Result<(std::sync::Arc<liquid_parser::Parser>, u64)> {
         let _span = trace_span!("get_or_build_parser").entered();
         let (source, partials_hash) =
             liquid_parser::partials_hash(Some(pages_dir), layout_dir, fs)?;
@@ -389,9 +389,9 @@ impl Site {
     /// whenever the parser is rebuilt (cached templates may embed partials).
     fn get_or_parse_template(
         &self,
-        parser: &liquid::Parser,
+        parser: &liquid_parser::Parser,
         source: &str,
-    ) -> Result<std::sync::Arc<liquid::Template>, liquid_core::Error> {
+    ) -> Result<std::sync::Arc<liquid_parser::Template>, liquid_core::Error> {
         let mut hasher = SeaHasher::new();
         hasher.write(source.as_bytes());
         let key = hasher.finish();
@@ -1036,14 +1036,14 @@ impl Site {
         &self,
         object: &Object,
         object_def: &ObjectDefinition,
-        template: &liquid::Template,
+        template: &liquid_parser::Template,
         template_path: &PathBuf,
         template_hash: u64,
         partials_hash: u64,
         build_dir: &Path,
         base_context: &liquid::Object,
         signatures: &ContextSignatures,
-        liquid_parser: &liquid::Parser,
+        liquid_parser: &liquid_parser::Parser,
         plan: &mut WritePlan,
     ) -> Result<PathBuf> {
         let page = Page::new_with_parsed_template(
@@ -1117,7 +1117,7 @@ impl Site {
         base_context: &liquid::Object,
         signatures: &ContextSignatures,
         fs: &T,
-        liquid_parser: &liquid::Parser,
+        liquid_parser: &liquid_parser::Parser,
         plan: &mut WritePlan,
     ) -> Result<Option<PathBuf>> {
         let field_config = &self.field_config;
