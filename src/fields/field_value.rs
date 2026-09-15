@@ -11,7 +11,8 @@ use crate::util::integer_decode;
 use crate::value_path::ValuePathError;
 use crate::{FieldConfig, ObjectDefinition, ValuePath};
 use anyhow::Result;
-use comrak::{markdown_to_html, ComrakOptions};
+use comrak::nodes::NodeValue;
+use comrak::{format_html, parse_document, Arena, ComrakOptions};
 use liquid::{model, ValueView};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
@@ -242,11 +243,83 @@ const MARKDOWN_CACHE_MAX_ENTRIES: usize = 1024;
 static MARKDOWN_CACHE: Lazy<std::sync::RwLock<std::collections::HashMap<String, String>>> =
     Lazy::new(|| std::sync::RwLock::new(std::collections::HashMap::new()));
 
+/// Liquid written inside markdown code — an inline span, or a fenced or
+/// indented block — is there to be read, not run: the `{{ … }}` in a code
+/// sample *is* the sample. A markdown field is turned into html before the page
+/// renders (`as_scalar`, below) and `crate::tags::output` renders liquid it
+/// finds in a value, so without this the sample would be evaluated —
+/// or, more often, fail to parse, since the html escaping applied to code turns
+/// the quotes in a filter argument into `&quot;`.
+///
+/// The html renderer escapes code itself, so there is no way to ask it to write
+/// a literal `{`. Instead every `{` that opens a liquid delimiter is replaced in
+/// the ast with a sentinel the renderer passes through untouched, and the
+/// sentinel becomes `&#123;` once the html exists. `\0` is sound as that
+/// sentinel because comrak replaces every NUL in its input with U+FFFD while
+/// reading lines — CommonMark requires it — so one can never reach the ast from
+/// the source.
+///
+/// Only markdown's own code nodes are treated this way. Html the author wrote
+/// out by hand passes through untouched, `<code>` included, so a template that
+/// deliberately outputs liquid through one keeps working.
+const CODE_SENTINEL: char = '\0';
+
+/// What [`CODE_SENTINEL`] stands for. A numeric character reference, because a
+/// `{` written literally here would be liquid again.
+const ESCAPED_BRACE: &str = "&#123;";
+
+fn markdown_to_html(source: &str) -> String {
+    let arena = Arena::new();
+    let root = parse_document(&arena, source, &MARKDOWN_OPTIONS);
+    let mut found = false;
+    for node in root.descendants() {
+        let mut data = node.data.borrow_mut();
+        let literal = match data.value {
+            NodeValue::Code(ref mut code) => &mut code.literal,
+            NodeValue::CodeBlock(ref mut block) => &mut block.literal,
+            _ => continue,
+        };
+        if let Some(neutralized) = neutralize_liquid(literal) {
+            *literal = neutralized;
+            found = true;
+        }
+    }
+    let mut html = Vec::new();
+    format_html(root, &MARKDOWN_OPTIONS, &mut html).expect("writing to a Vec cannot fail");
+    let html = String::from_utf8(html).expect("comrak writes utf-8");
+    if found {
+        html.replace(CODE_SENTINEL, ESCAPED_BRACE)
+    } else {
+        html
+    }
+}
+
+/// Replaces each `{` that opens a `{{` or `{%` with [`CODE_SENTINEL`],
+/// returning `None` when there is none to replace. One pass is enough because
+/// the `{` is consumed rather than kept: a `{` left behind is by definition not
+/// followed by `{` or `%`, and a sentinel contributes no `{` of its own, so no
+/// delimiter can survive the pass or form behind it.
+fn neutralize_liquid(literal: &str) -> Option<String> {
+    if !literal.contains("{{") && !literal.contains("{%") {
+        return None;
+    }
+    let bytes = literal.as_bytes();
+    let mut out = String::with_capacity(literal.len());
+    for (at, c) in literal.char_indices() {
+        if c == '{' && matches!(bytes.get(at + 1), Some(b'{' | b'%')) {
+            out.push(CODE_SENTINEL);
+        } else {
+            out.push(c);
+        }
+    }
+    Some(out)
+}
+
 fn markdown_to_html_cached(source: &str) -> String {
     if let Some(html) = MARKDOWN_CACHE.read().unwrap().get(source) {
         return html.clone();
     }
-    let html = markdown_to_html(source, &MARKDOWN_OPTIONS);
+    let html = markdown_to_html(source);
     let mut cache = MARKDOWN_CACHE.write().unwrap();
     if cache.len() >= MARKDOWN_CACHE_MAX_ENTRIES {
         cache.clear();
@@ -1241,6 +1314,86 @@ Within it I can add some tags like: <a href=\"https://taskmastersbirthday.com\">
         assert!(
             rendered.contains("<a href=\"https://"),
             "links are rendered properly"
+        );
+    }
+
+    fn html(markdown: &str) -> String {
+        FieldValue::Markdown(markdown.to_string())
+            .as_scalar()
+            .expect("parsing failed")
+            .into_string()
+            .to_string()
+    }
+
+    #[test]
+    fn liquid_in_an_inline_code_span_is_not_liquid() {
+        let rendered = html(r#"use `{{ posts | where: "slug", "a" }}` here"#);
+        assert!(
+            rendered
+                .contains("<code>&#123;{ posts | where: &quot;slug&quot;, &quot;a&quot; }}</code>"),
+            "code span was rewritten: {rendered}"
+        );
+    }
+
+    #[test]
+    fn liquid_in_a_code_fence_is_not_liquid() {
+        let rendered = html("```liquid\n{% for p in posts %}{{ p.title }}{% endfor %}\n```");
+        assert!(
+            rendered.contains("&#123;% for p in posts %}&#123;{ p.title }}&#123;% endfor %}"),
+            "code fence was rewritten: {rendered}"
+        );
+    }
+
+    #[test]
+    fn liquid_in_an_indented_code_block_is_not_liquid() {
+        let rendered = html("text\n\n    {{ title }}\n");
+        assert!(
+            rendered.contains("&#123;{ title }}"),
+            "indented block was rewritten: {rendered}"
+        );
+    }
+
+    /// Only the brace that opens a delimiter is replaced, so braces that are
+    /// just braces — the common case in a code sample — are left alone.
+    #[test]
+    fn braces_that_open_nothing_are_untouched() {
+        let rendered = html("```\nfn main() { println!(\"{}\", 1) }\n```");
+        assert!(
+            rendered.contains("fn main() { println!(&quot;{}&quot;, 1) }"),
+            "plain braces were escaped: {rendered}"
+        );
+    }
+
+    /// The pass consumes each brace it replaces, so a run of them cannot leave
+    /// a delimiter behind.
+    #[test]
+    fn runs_of_braces_leave_no_delimiter() {
+        let rendered = html("`{{{{ x }}`");
+        assert!(
+            !rendered.contains("{{") && !rendered.contains("{%"),
+            "delimiter survived: {rendered}"
+        );
+        // The last brace opens nothing once the three before it are gone.
+        assert_eq!(rendered.matches("&#123;").count(), 3, "{rendered}");
+    }
+
+    /// Html the author wrote is not markdown's code, and liquid in it still
+    /// renders — `{% raw %}` remains the way to opt out of that.
+    #[test]
+    fn liquid_in_handwritten_html_is_left_alone() {
+        let rendered = html("<span>{{ title }}</span>");
+        assert!(
+            rendered.contains("<span>{{ title }}</span>"),
+            "handwritten html was escaped: {rendered}"
+        );
+    }
+
+    #[test]
+    fn code_without_liquid_is_unchanged() {
+        let rendered = html("`plain code`");
+        assert!(
+            rendered.contains("<code>plain code</code>") && !rendered.contains("&#123;"),
+            "{rendered}"
         );
     }
 }
