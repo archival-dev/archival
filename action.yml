@@ -53,6 +53,9 @@ runs:
     - name: Build with Archival
       run: ${{ inputs.archival-bin || 'archival' }} build
       shell: bash
+    - name: Archival Postbuild
+      run: ${{ inputs.archival-bin || 'archival' }} postbuild
+      shell: bash
     - name: Get Build Size
       id: size
       run: echo "bytes=$(du -s dist | cut -f1)" >> $GITHUB_OUTPUT
