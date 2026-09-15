@@ -179,7 +179,9 @@ local.
   `site_name` and `site_url`, but only `site_url` is exposed to templates.
   Referencing `site_name` fails the build with `liquid: failed to evaluate
   value`. Put the site's name in an object field, or write it literally.
-- **Field values render as Liquid.** A literal `{{` in content needs escaping.
+- **Field values render as Liquid.** A literal `{{` in content needs escaping —
+  except inside markdown code, where a span or a fenced or indented block is
+  written out exactly as authored.
 - **A page may render twice.** If output still contains Liquid after the first
   pass, archival renders again — so a bare `{% raw %}` does not survive into
   output.
