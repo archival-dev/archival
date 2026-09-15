@@ -16,7 +16,6 @@ mod login;
 mod lsp;
 mod manifest;
 mod objects;
-mod postbuild;
 mod prebuild;
 #[cfg(feature = "proto")]
 mod proto;
@@ -111,7 +110,6 @@ pub const COMMANDS: &[&'static dyn BinaryCommand] = &[
     &format::Command {},
     &manifest::Command {},
     &prebuild::Command {},
-    &postbuild::Command {},
     &login::Command {},
     &compat::Command {},
     &upload::Command {},

@@ -25,13 +25,6 @@
         "type": "string"
       }
     },
-    "postbuild": {
-      "description": "a list of shell commands to run after building this site, against the contents of build_dir",
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
     "site_url": {
       "description": "a url that will be available to this site's liquid files as site_url, which can also be used by the archival editor",
       "type": "string"

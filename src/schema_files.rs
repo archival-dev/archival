@@ -100,7 +100,6 @@ fn all_manifest_fields() -> Vec<ManifestField> {
         ManifestField::ObjectDefinitionFile,
         ManifestField::ObjectsDir,
         ManifestField::Prebuild,
-        ManifestField::Postbuild,
         ManifestField::PagesDir,
         ManifestField::BuildDir,
         ManifestField::StaticDir,
@@ -119,7 +118,6 @@ fn all_manifest_fields() -> Vec<ManifestField> {
             | ManifestField::ObjectDefinitionFile
             | ManifestField::ObjectsDir
             | ManifestField::Prebuild
-            | ManifestField::Postbuild
             | ManifestField::PagesDir
             | ManifestField::BuildDir
             | ManifestField::StaticDir

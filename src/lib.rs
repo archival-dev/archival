@@ -1346,7 +1346,6 @@ mod lib {
         archival.modify_manifest(|m| {
             m.site_url = Some("test.com".to_string());
             m.prebuild = vec!["test".to_string()];
-            m.postbuild = vec!["after".to_string()];
         })?;
         let output = archival.site.manifest.to_toml()?;
         println!("{}", output);
@@ -1356,7 +1355,6 @@ mod lib {
         assert!(!output.contains("objects"));
         // Does show non-defaults
         assert!(output.contains("prebuild = [\"test\"]"));
-        assert!(output.contains("postbuild = [\"after\"]"));
         Ok(())
     }
 

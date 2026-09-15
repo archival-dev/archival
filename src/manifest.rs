@@ -233,7 +233,6 @@ pub struct Manifest {
     pub upload_prefix: String,
     pub archival_version: Option<String>,
     pub prebuild: Vec<String>,
-    pub postbuild: Vec<String>,
     pub site_name: Option<String>,
     pub site_url: Option<String>,
     pub object_definition_file: PathBuf,
@@ -265,7 +264,6 @@ pub enum ManifestField {
     ObjectDefinitionFile,
     ObjectsDir,
     Prebuild,
-    Postbuild,
     PagesDir,
     BuildDir,
     StaticDir,
@@ -287,7 +285,6 @@ impl ManifestField {
             ManifestField::ObjectDefinitionFile => "object_file",
             ManifestField::ObjectsDir => "objects",
             ManifestField::Prebuild => "prebuild",
-            ManifestField::Postbuild => "postbuild",
             ManifestField::PagesDir => "pages",
             ManifestField::BuildDir => "build_dir",
             ManifestField::StaticDir => "static_dir",
@@ -297,24 +294,6 @@ impl ManifestField {
             ManifestField::EditorTypes => "editor_types",
             ManifestField::Metadata => "metadata",
         }
-    }
-}
-
-fn string_list(value: &Value) -> Vec<String> {
-    value.as_array().map_or(vec![], |v| {
-        v.iter()
-            .map(|s| s.as_str().map_or("".to_string(), |s| s.to_string()))
-            .collect()
-    })
-}
-
-fn string_list_value(list: &[String]) -> Option<Value> {
-    if list.is_empty() {
-        None
-    } else {
-        Some(Value::Array(
-            list.iter().map(|v| Value::String(v.to_string())).collect(),
-        ))
     }
 }
 
@@ -431,7 +410,6 @@ impl Manifest {
             upload_prefix: upload_prefix.to_string(),
             archival_version: None,
             prebuild: vec![],
-            postbuild: vec![],
             site_url: None,
             site_name: None,
             uploads_url: None,
@@ -449,7 +427,7 @@ impl Manifest {
     fn is_default(&self, field: &ManifestField) -> bool {
         let str_value = self.field_as_string(field);
         match field {
-            ManifestField::Prebuild | ManifestField::Postbuild => str_value == "[]",
+            ManifestField::Prebuild => str_value == "[]",
             ManifestField::ObjectDefinitionFile => {
                 // The legacy name counts as a default too, so formatting a
                 // site that still uses objects.toml doesn't write out an
@@ -525,8 +503,13 @@ impl Manifest {
                 "uploads_url" => manifest.uploads_url = value.as_str().map(|s| s.to_string()),
                 "site_url" => manifest.site_url = value.as_str().map(|s| s.to_string()),
                 "site_name" => manifest.site_name = value.as_str().map(|s| s.to_string()),
-                "prebuild" => manifest.prebuild = string_list(&value),
-                "postbuild" => manifest.postbuild = string_list(&value),
+                "prebuild" => {
+                    manifest.prebuild = value.as_array().map_or(vec![], |v| {
+                        v.iter()
+                            .map(|s| s.as_str().map_or("".to_string(), |s| s.to_string()))
+                            .collect()
+                    })
+                }
                 "pages" => manifest.pages_dir = path_or_err(value, "pages")?,
                 "objects" => manifest.objects_dir = path_or_err(value, "objects")?,
                 "build_dir" => manifest.build_dir = path_or_err(value, "build_dir")?,
@@ -591,8 +574,18 @@ impl Manifest {
                 self.object_definition_file.to_string_lossy().to_string(),
             )),
             ManifestField::UploadsUrl => self.uploads_url.to_owned().map(Value::String),
-            ManifestField::Prebuild => string_list_value(&self.prebuild),
-            ManifestField::Postbuild => string_list_value(&self.postbuild),
+            ManifestField::Prebuild => {
+                if self.prebuild.is_empty() {
+                    None
+                } else {
+                    Some(Value::Array(
+                        self.prebuild
+                            .iter()
+                            .map(|v| Value::String(v.to_string()))
+                            .collect(),
+                    ))
+                }
+            }
             ManifestField::ObjectsDir => Some(Value::String(
                 self.objects_dir.to_string_lossy().to_string(),
             )),
@@ -752,9 +745,6 @@ impl Manifest {
             ManifestField::Prebuild => {
                 panic!("Prebuild is not modifiable via events")
             }
-            ManifestField::Postbuild => {
-                panic!("Postbuild is not modifiable via events")
-            }
             ManifestField::ObjectsDir => self.objects_dir = PathBuf::from(value),
             ManifestField::PagesDir => self.pages_dir = PathBuf::from(value),
             ManifestField::BuildDir => self.build_dir = PathBuf::from(value),
@@ -773,7 +763,7 @@ impl Manifest {
     pub fn field_as_string(&self, field: &ManifestField) -> String {
         match self.toml_field(field) {
             Some(fv) => match fv {
-                Value::Array(a) => Value::Array(a).to_string(),
+                Value::Array(a) => toml::to_string(&a).unwrap_or_default(),
                 Value::String(s) => s,
                 Value::Table(t) => toml::to_string(&t).unwrap_or_default(),
                 _ => panic!("unsupported manifest field type"),
@@ -790,7 +780,6 @@ impl Manifest {
             ManifestField::UploadPrefix,
             ManifestField::UploadsUrl,
             ManifestField::Prebuild,
-            ManifestField::Postbuild,
             ManifestField::ObjectDefinitionFile,
             ManifestField::StaticDir,
             ManifestField::BuildDir,
@@ -844,7 +833,6 @@ site_name = "jesse's site"
 upload_prefix = "site-repo-doid/"
 uploads_url = "https://uploads.archival.dev"
 prebuild = ['echo "HELLO!"']
-postbuild = ['echo "BYE!"']
 object_file = "m_objects.toml"
 static_dir = "m_public"
 build_dir = "m_dist"
@@ -900,20 +888,6 @@ baz = "hello!"
     }
 
     #[test]
-    fn hook_fields_print_as_arrays() -> Result<()> {
-        let m = Manifest::from_string(Path::new(""), full_manifest_content().to_string(), None)?;
-        assert_eq!(
-            m.field_as_string(&ManifestField::Prebuild),
-            r#"['echo "HELLO!"']"#
-        );
-        assert_eq!(
-            m.field_as_string(&ManifestField::Postbuild),
-            r#"['echo "BYE!"']"#
-        );
-        Ok(())
-    }
-
-    #[test]
     fn manifest_parsing() -> Result<()> {
         let m = Manifest::from_string(Path::new(""), full_manifest_content().to_string(), None)?;
         println!("M: {:?}", m);
@@ -936,7 +910,6 @@ baz = "hello!"
             Some("https://uploads.archival.dev".to_string())
         );
         assert_eq!(m.prebuild.len(), 1);
-        assert_eq!(m.postbuild, vec!["echo \"BYE!\""]);
         let t1 = &m.editor_types["day"];
         assert_eq!(t1.alias_of, "date");
         assert_eq!(t1.validate.len(), 1);

@@ -9,37 +9,7 @@ use crate::{
 };
 use anyhow::Result;
 use clap::ArgMatches;
-use std::{
-    path::Path,
-    sync::{atomic::AtomicBool, Arc},
-};
-
-/// Runs each manifest hook command in `root_dir`, in order, stopping at the first failure.
-pub(super) fn run_commands(root_dir: &Path, commands: &[String]) -> ExitStatus {
-    for s in commands {
-        let cmd_parts: Vec<&str> = s.split_whitespace().collect();
-        if cmd_parts.is_empty() {
-            continue;
-        }
-        println!("running {}", cmd_parts.join(" "));
-        let status = std::process::Command::new(cmd_parts[0])
-            .args(&cmd_parts[1..])
-            .current_dir(root_dir)
-            .status();
-        match status {
-            Ok(status) if status.success() => {}
-            Ok(status) => {
-                println!("{} failed: {}", s, status);
-                return ExitStatus::Error;
-            }
-            Err(e) => {
-                println!("error running {}: {}", s, e);
-                return ExitStatus::Error;
-            }
-        }
-    }
-    ExitStatus::Ok
-}
+use std::sync::{atomic::AtomicBool, Arc};
 
 pub struct Command {}
 impl BinaryCommand for Command {
@@ -60,6 +30,29 @@ impl BinaryCommand for Command {
         let root_dir = command_root(args);
         let fs = file_system_stdlib::NativeFileSystem::new(&root_dir);
         let site = Site::load(&fs, Some(""))?;
-        Ok(run_commands(&root_dir, &site.manifest.prebuild))
+        for s in site.manifest.prebuild {
+            let cmd_parts: Vec<&str> = s.split_whitespace().collect();
+            if !cmd_parts.is_empty() {
+                println!("runnning {} {}", cmd_parts[0], cmd_parts[1..].join(" "));
+                let status = std::process::Command::new(cmd_parts[0])
+                    .args(&cmd_parts[1..])
+                    .current_dir(&root_dir)
+                    .spawn()
+                    .unwrap_or_else(|_| panic!("spawn failed: {}", s))
+                    .wait();
+                match status {
+                    Ok(status) => {
+                        if !status.success() {
+                            return Ok(ExitStatus::Error);
+                        }
+                    }
+                    Err(e) => {
+                        println!("error: {}", e);
+                        return Ok(ExitStatus::Error);
+                    }
+                }
+            }
+        }
+        Ok(ExitStatus::Ok)
     }
 }
