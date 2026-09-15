@@ -151,6 +151,11 @@ fn signed_reads(
         .collect()
 }
 
+fn is_not_found(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<std::io::Error>()
+        .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+}
+
 fn hash_source(source: &str) -> u64 {
     let mut hasher = SeaHasher::new();
     hasher.write(source.as_bytes());
@@ -226,7 +231,10 @@ impl WritePlan {
         }
         for path in self.deletes {
             if fs.exists(&path)? {
-                fs.delete(&path)?;
+                match fs.delete(&path) {
+                    Err(e) if !is_not_found(&e) => return Err(e),
+                    _ => {}
+                }
             }
             cache.remove(&path);
         }
@@ -771,7 +779,13 @@ impl Site {
         if fs.exists(static_dir)? {
             for file in fs.walk_dir(static_dir, false)? {
                 let from = static_dir.join(&file);
-                if let Some(content) = fs.read(&from)? {
+                // Files can vanish between the walk and the read (e.g. editor temp files).
+                let content = match fs.read(&from) {
+                    Ok(content) => content,
+                    Err(e) if is_not_found(&e) => continue,
+                    Err(e) => return Err(e),
+                };
+                if let Some(content) = content {
                     let hash = hash_file(&content);
                     let dest = build_dir.join(&file);
                     let dir = dest

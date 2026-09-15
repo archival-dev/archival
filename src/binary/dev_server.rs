@@ -307,11 +307,19 @@ pub fn watch_with(options: DevServerOptions) -> Result<crate::binary::ExitStatus
             } else {
                 // Reloading the site clears its static file cache (and may
                 // change the static dir), so sync in that case too.
-                if static_files_changed || site_reloaded {
+                let sync_result = if static_files_changed || site_reloaded {
                     static_files_changed = false;
-                    site.sync_static_files(&mut fs).unwrap();
-                }
-                if let Err(e) = site.build(&mut fs, BuildOptions::default()) {
+                    site.sync_static_files(&mut fs)
+                } else {
+                    Ok(())
+                };
+                if let Err(e) = sync_result {
+                    format!(
+                        "{} {}",
+                        style("Static file sync failed:").red(),
+                        style(e).red()
+                    )
+                } else if let Err(e) = site.build(&mut fs, BuildOptions::default()) {
                     format!("{} {}", style("Build failed:").red(), style(e).red())
                 } else {
                     #[cfg(feature = "carriers")]
