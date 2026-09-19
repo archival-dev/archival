@@ -498,7 +498,7 @@ fn known_fields(definition: &ObjectDefinition) -> String {
 
 /// The names a definition may not use, for a reader that wants to explain the
 /// rule rather than repeat the message.
-pub fn reserved_names() -> &'static [&'static str; 6] {
+pub fn reserved_names() -> &'static [&'static str; 7] {
     &RESERVED_FIELDS
 }
 
@@ -541,6 +541,16 @@ mod tests {
         assert_eq!(one.field.as_deref(), Some("order"));
         assert_eq!(one.span.as_ref().map(|s| s.line), Some(3));
         assert!(one.help.is_some());
+    }
+
+    /// `path` is injected like `order`, so a definition may not declare it.
+    #[test]
+    fn a_declared_path_field_is_reported_like_any_other_reserved_name() {
+        let found = defs("[post]\ntitle = \"string\"\npath = \"string\"\n");
+        let one = only(&found);
+        assert_eq!(one.code, Code::ReservedFieldName);
+        assert_eq!(one.field.as_deref(), Some("path"));
+        assert_eq!(one.span.as_ref().map(|s| s.line), Some(3));
     }
 
     /// Fixing one mistake at a time costs a round trip each, and for anything

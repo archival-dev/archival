@@ -20,6 +20,7 @@
           "objects",
           "page",
           "page_name",
+          "path",
           "template"
         ]
       }
@@ -27,7 +28,7 @@
     "fieldName": {
       "description": "fields may not use archival's reserved names. `template` is the exception: it is reserved as a field, but is how an object names the page it renders with.",
       "not": {
-        "enum": ["object_name", "order", "objects", "page", "page_name"]
+        "enum": ["object_name", "order", "objects", "page", "page_name", "path"]
       }
     },
     "objectDefinition": {

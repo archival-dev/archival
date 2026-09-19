@@ -42,9 +42,9 @@ export type ArchivalMeta =
   | { [key: string]: ArchivalMeta };"#;
 
 /// archival injects these into every object read from its own file. A
-/// definition that declares one of them is ignored in favor of the injected
-/// value, so they are emitted from here rather than from `fields`.
-const INJECTED: [&str; 2] = ["path", "order"];
+/// definition may not declare them, so they are emitted from here rather than
+/// from `fields`.
+const INJECTED: [&str; 2] = [crate::reserved_fields::PATH, crate::reserved_fields::ORDER];
 
 /// Renders a TypeScript string literal. Delegating to serde_json keeps quoting
 /// and escaping correct for object names we don't control.

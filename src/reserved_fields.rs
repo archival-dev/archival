@@ -4,6 +4,7 @@ use std::{error::Error, fmt};
 // objects.
 pub const TEMPLATE: &str = "template";
 pub const ORDER: &str = "order";
+pub const PATH: &str = "path";
 pub const OBJECTS: &str = "objects";
 pub const OBJECT_NAME: &str = "object_name";
 pub const PAGE: &str = "page";
@@ -11,7 +12,8 @@ pub const PAGE_NAME: &str = "page_name";
 
 /// The canonical set of reserved names. objects.schema.json forbids these as
 /// object and field names, and the schema_files tests assert the two agree.
-pub const RESERVED_FIELDS: [&str; 6] = [OBJECT_NAME, ORDER, OBJECTS, PAGE_NAME, PAGE, TEMPLATE];
+pub const RESERVED_FIELDS: [&str; 7] =
+    [OBJECT_NAME, ORDER, OBJECTS, PAGE_NAME, PAGE, PATH, TEMPLATE];
 
 #[derive(Debug, Clone)]
 pub struct ReservedFieldError {
@@ -28,6 +30,7 @@ pub fn reserved_field_from_str(field: &str) -> &'static str {
     match field {
         OBJECT_NAME => OBJECT_NAME,
         ORDER => ORDER,
+        PATH => PATH,
         PAGE_NAME => PAGE_NAME,
         TEMPLATE => TEMPLATE,
         OBJECTS => OBJECTS,
