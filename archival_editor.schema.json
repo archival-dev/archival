@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://archival.dev/schemas/archival_editor.schema.json",
   "title": "Archival editor configuration",
-  "description": "Per-object configuration for the archival editor, read from archival_editor.toml at the site root. Keys are object names from archival_objects.toml, except `shortcuts`, which is reserved.",
+  "description": "Per-object configuration for the archival editor, read from archival_editor.toml at the site root. Keys are object names from archival_objects.toml, except `shortcuts` and `activitypub`, which are reserved.",
   "type": "object",
   "properties": {
     "shortcuts": {
@@ -11,6 +11,9 @@
       "items": {
         "$ref": "#/definitions/shortcutConfig"
       }
+    },
+    "activitypub": {
+      "$ref": "#/definitions/activityPubConfig"
     }
   },
   "additionalProperties": {
@@ -75,6 +78,124 @@
           "description": "the list an entry created here joins, written as dot separated names: an object name from archival_objects.toml, then that object's filename where the object is a list rather than a single file, then the child field names leading down to the list, with an index wherever the route passes through one.",
           "type": "string",
           "pattern": "^[^.]+(\\.[^.]+)*$"
+        }
+      }
+    },
+    "activityPubConfig": {
+      "description": "publishes the site over ActivityPub, so it can be followed from Mastodon and other fediverse servers. Every mapping names a field of the object it reads from. Reserved: an object of this name cannot be configured here.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objects"],
+      "properties": {
+        "username": {
+          "description": "the local part of the site's handle, `@<username>@<domain>`: letters, numbers and underscores, with dots and dashes allowed between them, up to 64 characters",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_](?:[A-Za-z0-9_.-]{0,62}[A-Za-z0-9_])?$"
+        },
+        "actor": {
+          "$ref": "#/definitions/activityPubActorConfig"
+        },
+        "objects": {
+          "description": "the lists published, keyed by the name of a list object from archival_objects.toml. Every instance of each list is published as its own post.",
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/definitions/activityPubObjectConfig"
+          }
+        }
+      }
+    },
+    "activityPubActorConfig": {
+      "description": "the profile other servers show for the site, read from a root object",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["object"],
+      "properties": {
+        "object": {
+          "description": "the root object the profile is read from: a single object from archival_objects.toml, not a list",
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "description": "the string, markdown or enum field shown as the profile's display name",
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "description": "the string, markdown or enum field shown as the profile's bio",
+          "type": "string",
+          "minLength": 1
+        },
+        "icon": {
+          "description": "the image field shown as the profile's avatar",
+          "type": "string",
+          "minLength": 1
+        },
+        "image": {
+          "description": "the image field shown as the profile's header",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "activityPubObjectConfig": {
+      "description": "how each instance of a list object is published",
+      "type": "object",
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "properties": {
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": ["content"]
+        },
+        {
+          "properties": {
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": ["name"]
+        }
+      ],
+      "properties": {
+        "type": {
+          "description": "the ActivityPub object type each instance is published as",
+          "type": "string",
+          "enum": ["Article", "Note"],
+          "default": "Article"
+        },
+        "name": {
+          "description": "the string, markdown or enum field published as each post's title",
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "description": "the string, markdown or enum field published as each post's summary, which Mastodon shows as a content warning over the post",
+          "type": "string",
+          "minLength": 1
+        },
+        "content": {
+          "description": "the string, markdown or enum field published as each post's body",
+          "type": "string",
+          "minLength": 1
+        },
+        "published": {
+          "description": "the date field published as when each post was first published",
+          "type": "string",
+          "minLength": 1
+        },
+        "updated": {
+          "description": "the date field published as when each post was last updated",
+          "type": "string",
+          "minLength": 1
+        },
+        "image": {
+          "description": "the image field attached to each post",
+          "type": "string",
+          "minLength": 1
         }
       }
     }

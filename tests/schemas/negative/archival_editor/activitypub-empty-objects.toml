@@ -1,0 +1,5 @@
+# The table is present but maps no list, which publishes nothing.
+[activitypub]
+username = "blog"
+
+[activitypub.objects]

@@ -1,0 +1,5 @@
+# serde drops `body` silently, so the editor accepts this and the typo for
+# `content` only surfaces when the site publishes.
+[activitypub.objects.post]
+name = "title"
+body = "body"

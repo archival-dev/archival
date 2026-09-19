@@ -1,0 +1,7 @@
+# ActivityPubActorConfig::object is not an Option: a profile has to be read from
+# some object.
+[activitypub.actor]
+name = "title"
+
+[activitypub.objects.post]
+content = "body"

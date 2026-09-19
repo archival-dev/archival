@@ -1,0 +1,4 @@
+# ActivityPubObjectType has no `Video` variant, so this fails to deserialize.
+[activitypub.objects.post]
+type = "Video"
+content = "body"

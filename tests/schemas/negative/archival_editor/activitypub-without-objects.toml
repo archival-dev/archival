@@ -1,0 +1,8 @@
+# An actor with nothing to publish federates an empty account, so `objects` is
+# the one required key.
+[activitypub]
+username = "blog"
+
+[activitypub.actor]
+object = "site"
+name = "title"

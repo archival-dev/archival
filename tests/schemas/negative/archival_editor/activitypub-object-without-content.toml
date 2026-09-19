@@ -1,0 +1,5 @@
+# A post carrying only a date has no body and no title, so there is nothing for
+# a remote server to render. Every mapping names `content`, `name` or both.
+[activitypub.objects.post]
+published = "date"
+image = "cover"

@@ -1,0 +1,7 @@
+# Mastodon's username grammar has no spaces, so no remote server could follow
+# this handle.
+[activitypub]
+username = "my blog"
+
+[activitypub.objects.post]
+content = "body"

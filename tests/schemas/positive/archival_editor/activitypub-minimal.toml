@@ -1,0 +1,4 @@
+# A site federates as soon as it maps one list: the username falls back to one
+# derived from the domain, and a profile is optional.
+[activitypub.objects.post]
+content = "body"

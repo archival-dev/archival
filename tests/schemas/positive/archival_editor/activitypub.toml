@@ -1,0 +1,33 @@
+# `activitypub` is reserved at the top level, alongside `shortcuts` and the
+# object names.
+[activitypub]
+username = "blog"
+
+[activitypub.actor]
+object = "site"
+name = "title"
+summary = "bio"
+icon = "logo"
+image = "cover"
+
+[activitypub.objects.post]
+type = "Article"
+name = "title"
+summary = "excerpt"
+content = "body"
+published = "date"
+updated = "updated"
+image = "cover"
+
+# `type` defaults to Article, so a mapping needs none of its keys.
+[activitypub.objects.note]
+content = "text"
+
+[activitypub.objects.photo]
+type = "Note"
+content = "caption"
+image = "photo"
+
+[[post.views]]
+name = "default"
+primary = "title"
