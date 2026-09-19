@@ -2,6 +2,7 @@ mod archival_error;
 #[cfg(test)]
 mod build_id_tests;
 mod definition_comments;
+pub mod diagnostic;
 mod file_system;
 mod file_system_memory;
 mod file_system_mutex;
@@ -28,6 +29,7 @@ mod test_utils;
 pub mod toml_comments;
 mod typescript_defs;
 mod util;
+pub mod validate;
 mod value_path;
 use anyhow::Result;
 use events::{
@@ -437,23 +439,17 @@ impl<F: FileSystemAPI + Clone + Debug> Archival<F> {
                 })?;
                 Ok(object.to_toml(def)?)
             } else {
-                Err(objects
-                    .as_list()
-                    .map(|list| {
-                        ArchivalError::new(&format!(
-                            "{} {} not found in [{}]",
-                            obj_type,
-                            filename,
-                            list.iter()
-                                .map(|o| o.filename.clone())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ))
-                        .into()
-                    })
-                    .unwrap_or_else(|| {
-                        ArchivalError::new(&format!("object {} not found", filename)).into()
-                    }))
+                // A root object has one file, named for its type, so naming the
+                // files is what says which argument was wrong.
+                let known = objects
+                    .iter_mut()
+                    .map(|o| o.filename.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Err(
+                    ArchivalError::new(&format!("{obj_type} {filename} not found in [{known}]"))
+                        .into(),
+                )
             }
         } else {
             Err(ArchivalError::new(&format!("no objects of type: {}", obj_type)).into())

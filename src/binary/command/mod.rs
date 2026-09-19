@@ -24,6 +24,7 @@ mod run;
 mod schemas;
 mod types;
 mod upload;
+mod validate;
 
 pub enum ExitStatus {
     Error,
@@ -115,6 +116,7 @@ pub const COMMANDS: &[&'static dyn BinaryCommand] = &[
     &upload::Command {},
     &import::Command {},
     &objects::Command {},
+    &validate::Command {},
     &types::Command {},
     #[cfg(feature = "carriers")]
     &carriers::Command {},
