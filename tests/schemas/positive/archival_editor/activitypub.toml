@@ -12,6 +12,7 @@ image = "cover"
 
 [activitypub.objects.post]
 type = "Article"
+when = "federate"
 name = "title"
 summary = "excerpt"
 content = "body"

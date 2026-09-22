@@ -1,0 +1,4 @@
+# `when` has to name a boolean field; an empty name gates nothing.
+[activitypub.objects.post]
+when = ""
+content = "body"

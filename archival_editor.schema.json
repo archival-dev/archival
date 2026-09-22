@@ -167,6 +167,11 @@
           "enum": ["Article", "Note"],
           "default": "Article"
         },
+        "when": {
+          "description": "the boolean field gating publication: only instances where it is true are published, and one already published is retracted when it turns false",
+          "type": "string",
+          "minLength": 1
+        },
         "name": {
           "description": "the string, markdown or enum field published as each post's title",
           "type": "string",
