@@ -1,35 +1,59 @@
-# A github action for building archival sites and publishing them to a branch.
+# A github action for building and publishing archival sites.
+#
+# On the default branch the site is built and deployed by archival's servers,
+# and this run waits for it: it goes green only once the site is live. Any
+# other branch is built here, so a broken site still fails the check.
 name: Archival
 author: "Archival Team"
-description: "Builds and publishes a local archival site"
+description: "Builds and publishes an archival site"
 branding:
   icon: "archive"
   color: "green"
 inputs:
   archival-bin:
     description:
-      A path to an archival binary to run. If not provided, will run the version
-      from Cargo.toml.
+      A path to an archival binary to validate non-default branches with. If
+      not provided, will run the version from Cargo.toml.
     required: false
   archival-version:
     description:
-      Override the archival version to use from cargo. If archival-bin is
-      specified, this does nothing.
+      Override the archival version non-default branches are validated with. If
+      archival-bin is specified, this does nothing.
     required: false
     default: "0.22.2"
   api-host:
     description: "API Host to send build events to"
     required: false
     default: "https://api.archival.dev"
+  github-token:
+    description:
+      A token that can read this repo, which is how archival knows the build
+      request came from it.
+    required: false
+    default: ${{ github.token }}
+  timeout-minutes:
+    description: "How long to wait for the site to go live"
+    required: false
+    default: "30"
 runs:
   using: "composite"
   steps:
+    - name: Build and Deploy
+      if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+      shell: bash
+      env:
+        ARCHIVAL_API_HOST: ${{ inputs.api-host }}
+        ARCHIVAL_GITHUB_TOKEN: ${{ inputs.github-token }}
+        ARCHIVAL_TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
+      run: node "${{ github.action_path }}/action/deploy.mjs"
     - name: Checkout
+      if: ${{ github.ref != format('refs/heads/{0}', github.event.repository.default_branch) }}
       uses: actions/checkout@v4
     - name: Setup Node
+      if: ${{ github.ref != format('refs/heads/{0}', github.event.repository.default_branch) }}
       uses: actions/setup-node@v4
     - name: Install Archival
-      if: ${{ inputs.archival-bin == '' }}
+      if: ${{ github.ref != format('refs/heads/{0}', github.event.repository.default_branch) && inputs.archival-bin == '' }}
       shell: bash
       env:
         VERSION: ${{ inputs.archival-version }}
@@ -43,41 +67,11 @@ runs:
         mkdir -p "$HOME/.local/bin"
         tar xzf "$dir.tar.gz" -C "$HOME/.local/bin" --strip-components=1 "$dir/archival"
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-    - name: Set Build Dir
-      id: dist
-      run: echo "dist=$(${{ inputs.archival-bin || 'archival' }} manifest build_dir)" >> $GITHUB_OUTPUT
-      shell: bash
     - name: Archival Prebuild
+      if: ${{ github.ref != format('refs/heads/{0}', github.event.repository.default_branch) }}
       run: ${{ inputs.archival-bin || 'archival' }} prebuild
       shell: bash
     - name: Build with Archival
+      if: ${{ github.ref != format('refs/heads/{0}', github.event.repository.default_branch) }}
       run: ${{ inputs.archival-bin || 'archival' }} build
       shell: bash
-    - name: Get Build Size
-      id: size
-      run: echo "bytes=$(du -s dist | cut -f1)" >> $GITHUB_OUTPUT
-      shell: bash
-    - name: Limit Build Size
-      if: ${{ steps.size.outputs.bytes > 104857600 }}
-      run: |
-        echo "::error title={Artifact Too Big}::${{ steps.size.outputs.bytes }} exceeds maximum build size of 104857600 bytes"
-        exit 1
-      shell: bash
-    - name: Upload Build Artifact
-      uses: actions/upload-artifact@v4
-      id: artifact
-      with:
-        name: ${{ github.sha }}
-        path: ${{ steps.dist.outputs.dist }}
-        if-no-files-found: error
-        retention-days: 1
-        overwrite: true
-        include-hidden-files: true
-    - name: Deploy
-      # Only the default branch is published. A PR run still builds (so a broken
-      # site fails the check) but has nothing to deploy to.
-      if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-      uses: fjogeleit/http-request-action@v1
-      with:
-        url: "${{ inputs.api-host }}/sync/${{ github.repository }}/${{ steps.artifact.outputs.artifact-id }}/${{ github.ref_name }}"
-        method: "PUT"
