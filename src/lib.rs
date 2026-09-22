@@ -10,6 +10,7 @@ mod file_system_mutex;
 mod file_system_tests;
 mod filters;
 mod lib_fs;
+mod liquid_kstring;
 mod liquid_parser;
 mod liquid_rewrite;
 #[cfg(feature = "lsp")]

@@ -7,9 +7,8 @@
 //! name. Retrying only on failure is what lets liquid's own indexes win when a
 //! filename collides with one.
 
-use liquid_core::model::{
-    try_find, KString, KStringCow, KStringRef, ScalarCow, Value, ValueCow, ValueView,
-};
+use crate::liquid_kstring::{KString, KStringCow, KStringRef};
+use liquid_core::model::{try_find, ScalarCow, Value, ValueCow, ValueView};
 use liquid_core::runtime::{PartialStore, Registers};
 use liquid_core::{Result, Runtime};
 use std::collections::BTreeSet;

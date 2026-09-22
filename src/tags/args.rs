@@ -1,4 +1,4 @@
-use liquid_core::model::KString;
+use crate::liquid_kstring::KString;
 use liquid_core::parser::{TagToken, TryMatchToken};
 use liquid_core::Expression;
 use liquid_core::Result;

@@ -1,9 +1,9 @@
+use crate::liquid_kstring::{KString, KStringCow, KStringRef};
 use crate::named_lookup::NamedLookup;
 use crate::tags::args::{binding_name, parse_binding, parse_vars_from, Binding};
 use liquid_core::error::ResultLiquidExt;
 use liquid_core::model::{
-    find, try_find, DisplayCow, KString, KStringCow, KStringRef, Object, ObjectView, ScalarCow,
-    State, Value, ValueCow, ValueView,
+    find, try_find, DisplayCow, Object, ObjectView, ScalarCow, State, Value, ValueCow, ValueView,
 };
 use liquid_core::runtime::{Interrupt, InterruptRegister, PartialStore, Registers};
 use liquid_core::Expression;

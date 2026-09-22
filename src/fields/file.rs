@@ -1,3 +1,4 @@
+use crate::liquid_kstring::KStringCow;
 use crate::{fields::FieldConfig, object::Renderable};
 use liquid::{model, ObjectView, ValueView};
 use mime_guess::{mime::FromStrError, Mime, MimeGuess};
@@ -82,8 +83,8 @@ impl ValueView for DisplayType {
         false
     }
 
-    fn to_kstr(&self) -> liquid::model::KStringCow<'_> {
-        model::KStringCow::from(self.to_str())
+    fn to_kstr(&self) -> KStringCow<'_> {
+        KStringCow::from(self.to_str())
     }
 
     fn to_value(&self) -> liquid_core::Value {

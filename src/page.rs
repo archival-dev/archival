@@ -1,3 +1,4 @@
+use crate::liquid_kstring::KStringCow;
 use crate::{
     object::{Object, ObjectEntry},
     object_definition::ObjectDefinition,
@@ -343,8 +344,8 @@ impl ValueView for RecordingObjects<'_> {
             | liquid::model::State::Blank => self.inner.is_empty(),
         }
     }
-    fn to_kstr(&self) -> liquid::model::KStringCow<'_> {
-        liquid::model::KStringCow::from_string(self.to_string())
+    fn to_kstr(&self) -> KStringCow<'_> {
+        KStringCow::from_string(self.to_string())
     }
     fn to_value(&self) -> Value {
         self.reads.note(ContextDep::Everything);
@@ -363,7 +364,7 @@ impl liquid::ObjectView for RecordingObjects<'_> {
         self.reads.note(ContextDep::Everything);
         self.inner.len() as i64
     }
-    fn keys<'k>(&'k self) -> Box<dyn Iterator<Item = liquid::model::KStringCow<'k>> + 'k> {
+    fn keys<'k>(&'k self) -> Box<dyn Iterator<Item = KStringCow<'k>> + 'k> {
         self.reads.note(ContextDep::Everything);
         Box::new(self.inner.keys().map(|k| k.as_ref().into()))
     }
@@ -371,9 +372,7 @@ impl liquid::ObjectView for RecordingObjects<'_> {
         self.reads.note(ContextDep::Everything);
         Box::new(self.inner.values().map(|v| v.as_view()))
     }
-    fn iter<'k>(
-        &'k self,
-    ) -> Box<dyn Iterator<Item = (liquid::model::KStringCow<'k>, &'k dyn ValueView)> + 'k> {
+    fn iter<'k>(&'k self) -> Box<dyn Iterator<Item = (KStringCow<'k>, &'k dyn ValueView)> + 'k> {
         self.reads.note(ContextDep::Everything);
         Box::new(
             self.inner
@@ -455,8 +454,8 @@ impl ValueView for LayeredContext<'_> {
             | liquid::model::State::Blank => liquid::ObjectView::size(self) == 0,
         }
     }
-    fn to_kstr(&self) -> liquid::model::KStringCow<'_> {
-        liquid::model::KStringCow::from_string(self.to_string())
+    fn to_kstr(&self) -> KStringCow<'_> {
+        KStringCow::from_string(self.to_string())
     }
     fn to_value(&self) -> Value {
         Value::Object(self.merged())
@@ -473,7 +472,7 @@ impl liquid::ObjectView for LayeredContext<'_> {
     fn size(&self) -> i64 {
         liquid::ObjectView::keys(self).count() as i64
     }
-    fn keys<'k>(&'k self) -> Box<dyn Iterator<Item = liquid::model::KStringCow<'k>> + 'k> {
+    fn keys<'k>(&'k self) -> Box<dyn Iterator<Item = KStringCow<'k>> + 'k> {
         self.reads.note(ContextDep::Everything);
         Box::new(
             self.overlay
@@ -489,9 +488,7 @@ impl liquid::ObjectView for LayeredContext<'_> {
     fn values<'k>(&'k self) -> Box<dyn Iterator<Item = &'k dyn ValueView> + 'k> {
         Box::new(liquid::ObjectView::iter(self).map(|(_, v)| v))
     }
-    fn iter<'k>(
-        &'k self,
-    ) -> Box<dyn Iterator<Item = (liquid::model::KStringCow<'k>, &'k dyn ValueView)> + 'k> {
+    fn iter<'k>(&'k self) -> Box<dyn Iterator<Item = (KStringCow<'k>, &'k dyn ValueView)> + 'k> {
         self.reads.note(ContextDep::Everything);
         Box::new(
             self.overlay

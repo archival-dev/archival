@@ -1,7 +1,7 @@
+use crate::liquid_kstring::KString;
 use crate::named_lookup::NamedLookup;
 use crate::tags::args::parse_vars;
 use liquid_core::error::ResultLiquidExt;
-use liquid_core::model::KString;
 use liquid_core::Expression;
 use liquid_core::Language;
 use liquid_core::Renderable;

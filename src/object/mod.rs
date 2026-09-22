@@ -1,3 +1,4 @@
+use crate::liquid_kstring::KString;
 pub use crate::value_path::{ValuePath, ValuePathComponent, ValuePathError};
 use crate::{
     events::AddObjectValue,
@@ -9,10 +10,7 @@ use crate::{
     FieldConfig,
 };
 use anyhow::Result;
-use liquid::{
-    model::{KString, Value},
-    ObjectView, ValueView,
-};
+use liquid::{model::Value, ObjectView, ValueView};
 use ordermap::OrderMap;
 use serde::{Deserialize, Serialize};
 use std::{

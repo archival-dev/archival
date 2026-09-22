@@ -4,6 +4,7 @@ use super::DateTime;
 use super::{FieldType, InvalidFieldError};
 use crate::fields::file::RenderedFile;
 use crate::fields::DisplayType;
+use crate::liquid_kstring::KStringCow;
 use crate::manifest::{EditorTypes, ManifestEditorTypeValidator};
 use crate::object::to_liquid::{object_to_liquid_with, ToLiquidOptions};
 use crate::object::Renderable;
@@ -764,8 +765,8 @@ impl ValueView for FieldValue {
         }
     }
     /// Interpret as a string.
-    fn to_kstr(&self) -> model::KStringCow<'_> {
-        model::KStringCow::from(self.as_string(None))
+    fn to_kstr(&self) -> KStringCow<'_> {
+        KStringCow::from(self.as_string(None))
     }
     /// Query the value's state
     fn query_state(&self, state: model::State) -> bool {

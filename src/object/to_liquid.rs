@@ -1,8 +1,9 @@
+use crate::liquid_kstring::KString;
 use crate::{
     fields::{File, ObjectValues},
     FieldConfig, FieldValue, ObjectDefinition,
 };
-use liquid::model::{KString, ObjectIndex};
+use liquid::model::ObjectIndex;
 use liquid_core::{Value, ValueView};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

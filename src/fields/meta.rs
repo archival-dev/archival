@@ -1,3 +1,4 @@
+use crate::liquid_kstring::KStringCow;
 use liquid_core::model;
 use ordermap::OrderMap;
 use serde::{Deserialize, Serialize};
@@ -307,7 +308,7 @@ impl model::ValueView for Meta {
         false
     }
 
-    fn to_kstr(&self) -> model::KStringCow<'_> {
+    fn to_kstr(&self) -> KStringCow<'_> {
         format!("{:?}", self.0).into()
     }
 
@@ -329,7 +330,7 @@ impl model::ObjectView for Meta {
         self.0.len() as i64
     }
 
-    fn keys<'k>(&'k self) -> Box<dyn Iterator<Item = model::KStringCow<'k>> + 'k> {
+    fn keys<'k>(&'k self) -> Box<dyn Iterator<Item = KStringCow<'k>> + 'k> {
         Box::new(self.0.keys().map(|k| k.into()))
     }
 
@@ -339,7 +340,7 @@ impl model::ObjectView for Meta {
 
     fn iter<'k>(
         &'k self,
-    ) -> Box<dyn Iterator<Item = (model::KStringCow<'k>, &'k dyn model::ValueView)> + 'k> {
+    ) -> Box<dyn Iterator<Item = (KStringCow<'k>, &'k dyn model::ValueView)> + 'k> {
         todo!()
     }
 
@@ -461,7 +462,7 @@ impl model::ValueView for MetaValue {
         false
     }
 
-    fn to_kstr(&self) -> model::KStringCow<'_> {
+    fn to_kstr(&self) -> KStringCow<'_> {
         format!("{:?}", self).into()
     }
 
