@@ -92,6 +92,12 @@
           "type": "string",
           "pattern": "^[A-Za-z0-9_](?:[A-Za-z0-9_.-]{0,62}[A-Za-z0-9_])?$"
         },
+        "domain": {
+          "description": "the domain half of the site's handle, `@<username>@<domain>`, and the host every post's address is written against. Must be one of the site's own domains, without a scheme or port. Defaults to the site's primary domain, which is the one it was created with rather than the one added most recently. Changing it once the site has federated publishes it as a new account, which its followers are not following.",
+          "type": "string",
+          "maxLength": 253,
+          "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$"
+        },
         "actor": {
           "$ref": "#/definitions/activityPubActorConfig"
         },

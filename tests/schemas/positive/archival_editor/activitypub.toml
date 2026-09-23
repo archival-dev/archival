@@ -2,6 +2,7 @@
 # object names.
 [activitypub]
 username = "blog"
+domain = "example.com"
 
 [activitypub.actor]
 object = "site"
