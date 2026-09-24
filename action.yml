@@ -20,7 +20,7 @@ inputs:
       Override the archival version non-default branches are validated with. If
       archival-bin is specified, this does nothing.
     required: false
-    default: "0.22.2"
+    default: "0.23.0"
   api-host:
     description: "API Host to send build events to"
     required: false
