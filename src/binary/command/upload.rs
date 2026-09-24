@@ -52,7 +52,7 @@ pub enum UploadError {
     UploadFailed(String, String),
     #[error("could not infer repo from remotes: git command failed: {0}")]
     NoGit(String),
-    #[error("could not infer repo from remotes: {0} - only github URLs supported.")]
+    #[error("could not infer repo: {0}. Pass --repo, or set site_url in archival.toml.")]
     InferringRepoFailed(String),
 }
 
@@ -96,6 +96,32 @@ fn uploadable_fields_hint(def: &ObjectDefinition) -> String {
     }
 }
 
+/// The id `create-upload` addresses a site by: `github/<owner>/<name>` from a
+/// github remote, otherwise `domain/<domain>` from a `git.archival.dev` remote
+/// or the manifest's `site_url`.
+fn infer_repo_id(remotes: &str, site_url: Option<&str>) -> Result<String, UploadError> {
+    let first_remote = remotes.lines().next().unwrap_or_default();
+    let github_remote = Regex::new(r"github.com.+?\b(.+)\/(.+)\.git").unwrap();
+    if let Some(m) = github_remote.captures(first_remote) {
+        return Ok(format!("github/{}/{}", &m[1], &m[2]));
+    }
+    let archival_remote =
+        Regex::new(r"git\.archival\.dev/([^/\s]+?)(?:\.git)?(?:[/\s]|$)").unwrap();
+    if let Some(m) = archival_remote.captures(first_remote) {
+        return Ok(format!("domain/{}", m[1].to_lowercase()));
+    }
+    if let Some(host) = site_url
+        .and_then(|u| reqwest::Url::parse(u).ok())
+        .and_then(|u| u.host_str().map(str::to_lowercase))
+    {
+        return Ok(format!("domain/{}", host));
+    }
+    Err(UploadError::InferringRepoFailed(
+        "the first git remote is not on github or git.archival.dev, and archival.toml has no site_url"
+            .to_string(),
+    ))
+}
+
 pub struct Command {}
 impl BinaryCommand for Command {
     fn name(&self) -> &str {
@@ -114,7 +140,7 @@ impl BinaryCommand for Command {
                     .value_parser(value_parser!(String)),
             )
             .arg(
-                arg!(-r --repo <repo_name> "A repo name (e.g. github/your-org/your-site) to use for this upload. If not provided, will be inferred from the first git remote.")
+                arg!(-r --repo <repo_name> "A repo (e.g. github/your-org/your-site, or domain/your-site.com) to use for this upload. If not provided, will be inferred from the first git remote, then the site_url in archival.toml.")
                     .value_parser(value_parser!(String)),
             )
             .arg(
@@ -226,32 +252,14 @@ impl BinaryCommand for Command {
         let repo_id = if let Some(repo) = args.get_one::<String>("repo") {
             repo.to_string()
         } else {
-            let github_remote_match = Regex::new(r"github.com.+?\b(.+)\/(.+)\.git").unwrap();
             let git_command = std::process::Command::new("git")
-                .current_dir(root_dir)
+                .current_dir(&root_dir)
                 .arg("remote")
                 .arg("-v")
                 .output()
                 .map_err(|e| UploadError::NoGit(e.to_string()))?;
-            let output = String::from_utf8(git_command.stdout.as_slice().to_vec())
-                .map_err(|err| UploadError::InferringRepoFailed(err.to_string()))?;
-            let first_origin = output.split("\n").next().ok_or_else(|| {
-                UploadError::InferringRepoFailed(format!("No origins found in {}", output))
-            })?;
-            let first_match = github_remote_match
-                .captures_iter(first_origin)
-                .next()
-                .ok_or_else(|| {
-                    UploadError::InferringRepoFailed(format!(
-                        "No github origin found in {}",
-                        first_origin
-                    ))
-                })?;
-            format!(
-                "github/{}/{}",
-                first_match.get(1).unwrap().as_str(),
-                first_match.get(2).unwrap().as_str()
-            )
+            let remotes = String::from_utf8_lossy(&git_command.stdout);
+            infer_repo_id(&remotes, archival.site.manifest.site_url.as_deref())?
         };
         // Ok, this looks legit. Upload the file. Uploads usually live outside
         // of the site root, so read them from the OS, not the site's fs.
@@ -359,5 +367,54 @@ mod api_response {
     pub struct UploadedPart {
         pub part_number: usize,
         pub etag: String,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ARCHIVAL_URL: Option<&str> = Some("https://criollodeoaxaca.com");
+
+    #[test]
+    fn github_remote_wins() {
+        let remotes = "origin\tgit@github.com:some-org/some-site.git (fetch)\n";
+        assert_eq!(
+            infer_repo_id(remotes, ARCHIVAL_URL).unwrap(),
+            "github/some-org/some-site"
+        );
+    }
+
+    #[test]
+    fn archival_remote_addresses_its_domain() {
+        for remote in [
+            "origin\thttps://archival:tok@git.archival.dev/Criollodeoaxaca.com (fetch)",
+            "origin\thttps://git.archival.dev/criollodeoaxaca.com.git (fetch)",
+            "origin\thttps://git.archival.dev/criollodeoaxaca.com/ (push)",
+        ] {
+            assert_eq!(
+                infer_repo_id(remote, None).unwrap(),
+                "domain/criollodeoaxaca.com"
+            );
+        }
+    }
+
+    #[test]
+    fn falls_back_to_site_url() {
+        let remotes = "origin\thttps://gitlab.com/some-org/some-site.git (fetch)\n";
+        assert_eq!(
+            infer_repo_id(remotes, Some("https://Blog.Example.org/")).unwrap(),
+            "domain/blog.example.org"
+        );
+        assert_eq!(
+            infer_repo_id("", ARCHIVAL_URL).unwrap(),
+            "domain/criollodeoaxaca.com"
+        );
+    }
+
+    #[test]
+    fn fails_without_a_remote_or_site_url() {
+        assert!(infer_repo_id("", None).is_err());
+        assert!(infer_repo_id("", Some("not a url")).is_err());
     }
 }
