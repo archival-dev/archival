@@ -82,7 +82,7 @@
       }
     },
     "activityPubConfig": {
-      "description": "publishes the site over ActivityPub, so it can be followed from Mastodon and other fediverse servers. Every mapping names a field of the object it reads from. Reserved: an object of this name cannot be configured here.",
+      "description": "publishes the site over ActivityPub, so it can be followed from Mastodon and other fediverse servers. Past `username`, `domain`, `follow`, the actor's `object` and each object's `type`, every value names a field of the object it reads from. Reserved: an object of this name cannot be configured here.",
       "type": "object",
       "additionalProperties": false,
       "required": ["objects"],
@@ -97,6 +97,15 @@
           "type": "string",
           "maxLength": 253,
           "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$"
+        },
+        "follow": {
+          "description": "accounts the site follows, each a handle like `@user@example.com` or an https actor address. Following is how a site opts in to a bridge such as Bridgy Fed (`@bsky.brid.gy@bsky.brid.gy`). An account taken off the list is unfollowed on the next deploy.",
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "pattern": "^(?:@?[^@\\s/]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+|https://\\S+)$"
+          }
         },
         "actor": {
           "$ref": "#/definitions/activityPubActorConfig"

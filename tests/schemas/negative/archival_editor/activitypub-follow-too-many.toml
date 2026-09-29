@@ -1,0 +1,7 @@
+# Each account costs a lookup on the deploy that first follows it, so the api
+# follows at most 20 and refuses a longer list.
+[activitypub]
+follow = ["account0@example.com", "account1@example.com", "account2@example.com", "account3@example.com", "account4@example.com", "account5@example.com", "account6@example.com", "account7@example.com", "account8@example.com", "account9@example.com", "account10@example.com", "account11@example.com", "account12@example.com", "account13@example.com", "account14@example.com", "account15@example.com", "account16@example.com", "account17@example.com", "account18@example.com", "account19@example.com", "account20@example.com"]
+
+[activitypub.objects.post]
+content = "body"
