@@ -1,0 +1,7 @@
+# A follow is sent to an account, so an entry has to be a handle or an https
+# actor address rather than a bare domain.
+[activitypub]
+follow = ["bsky.brid.gy"]
+
+[activitypub.objects.post]
+content = "body"

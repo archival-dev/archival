@@ -3,6 +3,7 @@
 [activitypub]
 username = "blog"
 domain = "example.com"
+follow = ["@bsky.brid.gy@bsky.brid.gy", "https://mastodon.social/users/Gargron"]
 
 [activitypub.actor]
 object = "site"
