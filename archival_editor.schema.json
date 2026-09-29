@@ -82,7 +82,7 @@
       }
     },
     "activityPubConfig": {
-      "description": "publishes the site over ActivityPub, so it can be followed from Mastodon and other fediverse servers. Every mapping names a field of the object it reads from. Reserved: an object of this name cannot be configured here.",
+      "description": "publishes the site over ActivityPub, so it can be followed from Mastodon and other fediverse servers. Past `username`, `domain`, `follow`, the actor's `object` and each object's `type`, every value names a field of the object it reads from. Reserved: an object of this name cannot be configured here.",
       "type": "object",
       "additionalProperties": false,
       "required": ["objects"],
