@@ -188,7 +188,7 @@
           "minLength": 1
         },
         "featured": {
-          "description": "the boolean field featuring an instance: instances where it is true are listed in the account's featured collection, which servers such as Mastodon show as pinned posts, newest first and at most 5",
+          "description": "the boolean field featuring an instance: the newest 5 published instances where it is true, across every mapped list, are listed in the account's featured collection, which servers such as Mastodon show as pinned posts",
           "type": "string",
           "minLength": 1
         },
