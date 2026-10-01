@@ -1,0 +1,8 @@
+# A consumer compiles archival's bindings beside its own; every crate in that build names
+# the same C module, and the Swift and Kotlin names below are archival's own.
+[bindings.swift]
+module_name = "Archival"
+ffi_module_name = "ArchivalFFI"
+
+[bindings.kotlin]
+package_name = "dev.archival"

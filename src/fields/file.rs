@@ -16,6 +16,7 @@ pub enum FileError {
 
 #[derive(Debug, Default, Clone, PartialEq, PartialOrd, Hash, Deserialize, Serialize)]
 #[cfg_attr(feature = "typescript", derive(typescript_type_def::TypeDef))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum DisplayType {
     Image,
     Video,
@@ -122,6 +123,7 @@ impl RenderedFile {
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, PartialOrd, Hash)]
 #[cfg_attr(feature = "typescript", derive(typescript_type_def::TypeDef))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct File {
     pub display_type: DisplayType,
     pub filename: String,

@@ -256,6 +256,7 @@ pub struct Manifest {
 #[cfg_attr(feature = "binary", derive(clap::ValueEnum))]
 #[cfg_attr(feature = "binary", value(rename_all = "snake_case"))]
 #[cfg_attr(feature = "typescript", derive(typescript_type_def::TypeDef))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum ManifestField {
     UploadPrefix,
     ArchivalVersion,
