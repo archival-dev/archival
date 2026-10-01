@@ -94,7 +94,7 @@ export type EditOrderEvent = {
     "order": (F64 | null);
     "source": (string | null);
 };
-export type Usize = number;
+export type U32 = number;
 export type AddChildEvent = {
     "object": string;
     "filename": string;
@@ -104,7 +104,7 @@ export type AddChildEvent = {
     /**
      * If not provided, this will just append to the end of the child list.
      */
-    "index": (Usize | null);
+    "index": (U32 | null);
 };
 export type RemoveChildEvent = {
     "object": string;
