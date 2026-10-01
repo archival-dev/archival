@@ -1,0 +1,4 @@
+# `featured` has to name a boolean field; an empty name features nothing.
+[activitypub.objects.post]
+featured = ""
+content = "body"
