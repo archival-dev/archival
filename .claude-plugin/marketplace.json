@@ -9,7 +9,7 @@
     {
       "name": "archival",
       "source": "./plugins/archival",
-      "description": "Build a new Archival website from a short conversation and publish it to a preview URL."
+      "description": "Build a new Archival website from a conversation, or work on the Archival site in the current folder: build and validate locally, preview, go live, deploy."
     }
   ]
 }

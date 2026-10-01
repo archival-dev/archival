@@ -62,6 +62,14 @@ jobs:
       - name: validate schemas
         run: ./validate-schemas.sh
 
+  plugin:
+    name: Claude plugin
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v3
+      - name: check the plugin's scripts
+        run: ./plugins/archival/test.sh
+
   test:
     name: Tests
     env:

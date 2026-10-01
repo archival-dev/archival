@@ -17,6 +17,7 @@ the archival repo root):
 | `layout/` | Shared page chrome. **Singular.** | `layout_dir` |
 | `public/` | Copied verbatim into the build. CSS, fonts, images. | `static_dir` |
 | `dist/` | Build output. Gitignore it. | `build_dir` |
+| `archival_editor.toml` | Optional. How the editor lists each type, and shortcuts. See `reference/conventions.md` §4. | — |
 
 `archival.toml` usually needs only:
 
@@ -66,7 +67,8 @@ per-object page is generated.
 field carries a `sha`, `filename` and `mime`, and archival resolves the URL as
 `{uploads_url}/{upload_prefix}{sha}/{filename}`. Upload the file first and use
 its real SHA-256 — an invented one renders a URL to nothing. See
-`reference/publishing.md`.
+`reference/publishing.md` for a preview, and `reference/local.md` E for
+`archival upload` against a claimed site.
 
 `public/` is for things that are part of the design rather than the content:
 stylesheets, fonts, favicons, an SVG logo.
@@ -197,7 +199,8 @@ local.
 ## Useful commands
 
 ```bash
-archival build .              # render into dist/
+archival build .              # render into dist/; writes, never removes
+archival validate --json .    # manifest, definitions and objects; templates fail only in build
 archival run .                # rebuild on change, serve on :1024 (local only)
 archival objects .            # list this site's objects
 archival schemas . --inline   # JSON Schema for this site's own object types

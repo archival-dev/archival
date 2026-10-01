@@ -1,8 +1,8 @@
 {
   "name": "archival",
   "displayName": "Archival",
-  "description": "Build a new Archival website from a short conversation: interviews you about the site you want, writes it, and publishes it to a shareable preview URL.",
-  "version": "0.1.0",
+  "description": "Build an Archival website from a short conversation. In a chat it publishes to a shareable preview URL; in a folder it builds and validates locally with the archival CLI, goes live once, and deploys by git push. Also works on an existing Archival site in the current folder.",
+  "version": "0.2.0",
   "author": {
     "name": "Archival",
     "url": "https://archival.dev"

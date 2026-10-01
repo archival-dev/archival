@@ -1,6 +1,6 @@
 ---
 name: new
-description: Build a website with Archival from a short conversation, answer questions about how Archival works, and publish it to a shareable preview URL. Use when someone wants a new website, landing page, portfolio, or brochure site built with Archival, asks what Archival is or how it works, or arrives with an archival.dev preview session.
+description: Build a website with Archival from a short conversation, answer questions about how Archival works, and publish it to a shareable preview URL. Use when someone wants a new website, landing page, portfolio, or brochure site built with Archival, asks what Archival is or how it works, or arrives with an archival.dev preview session. In a folder with a shell it builds the site locally with the archival CLI instead.
 ---
 
 # Build an Archival site
@@ -13,14 +13,55 @@ The person you are talking to is usually **not a developer**. Do not ask them
 about TOML, Liquid, or directory layout. Ask about their business and their
 words; make every technical decision yourself.
 
-You need no local checkout, no working directory and no toolchain. The site is
-written straight into the preview and built on Archival's side.
+There are two places this runs, and step 0 tells them apart. In a chat you need
+no local checkout, no working directory and no toolchain: the site is written
+straight into the preview and built on Archival's side. In a folder with a
+shell, the folder is the site and the `archival` CLI builds it.
 
 **A live URL is the deliverable, and it comes early.** The whole shape is: get
 approved, ask one round of questions, publish something real within a few
 minutes, then improve it together while they watch. A session gets 20 publishes
 — they are there to be spent. Someone who has asked twice for a website and has
 no link yet has been failed, however good the thing you are still writing is.
+
+## 0. Where are you running?
+
+Answer one question before anything else: **can you run shell commands on a
+computer the person can see — a `Bash` tool and a working directory?**
+
+**No** (a claude.ai chat, the Archival connector, any MCP client): you are in
+**chat mode**. Skip to step 1. Nothing else in this section applies, and
+`reference/local.md` is not for you.
+
+**Yes**: you are in **code mode**. Run the detector and read its `key=value`
+lines:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/bin/site-info.sh"
+```
+
+If `CLAUDE_PLUGIN_ROOT` is unset you reached this file by URL rather than as a
+plugin. Install it — `/plugin marketplace add archival-dev/archival`, then
+`/plugin install archival@archival` — or fetch
+`https://raw.githubusercontent.com/archival-dev/archival/main/plugins/archival/bin/site-info.sh`
+and run that.
+
+- `site=yes` or `site=legacy`: this folder already holds an Archival site. Do
+  not build a new one over it. Use the `archival:site` skill, or read
+  `reference/local.md` and work on what is there.
+- `site=no` with `empty_dir=no`: the folder holds other work. Ask one question
+  — build here, or in a new subfolder named for the site? — and never scatter
+  files into a directory that is not theirs to fill.
+- Otherwise: steps 2 and 3 below apply word for word, then `reference/local.md`
+  takes the place of steps 4 and 5, with `reference/conventions.md` open
+  throughout. Step 6 applies in both modes.
+
+A `Session:` line in the prompt is a pre-approved preview session. In chat mode
+use it as step 1 says. In code mode keep building locally and spend it once, at
+go-live (`reference/local.md`, F). A shell that cannot reach `api.archival.dev`
+(`403` with `x-deny-reason: host_not_allowed`, as in a cloud sandbox) can still
+build and commit locally; going live then needs the connector in a new chat, or
+a GitHub remote already connected to a hosted site.
 
 ## 1. Get a session
 
@@ -41,9 +82,10 @@ optional.
 
 `reference/publishing.md` is the same flow over plain HTTP, but it only helps
 where the shell you are in can actually reach `api.archival.dev`. A local
-terminal can. A claude.ai sandbox and a Claude Code cloud session cannot — both
-answer `403` with `x-deny-reason: host_not_allowed`, and nothing you can do from
-inside changes that. If curl comes back with that, the connector is the only way
+terminal can, and in code mode it is also how you ship the finished folder. A
+claude.ai sandbox and a Claude Code cloud session cannot — both answer `403`
+with `x-deny-reason: host_not_allowed`, and nothing you can do from inside
+changes that. If curl comes back with that, the connector is the only way
 forward: say so and stop, rather than writing a site nobody can publish.
 
 With the tools in hand, they do the rest of this on their own. A request
@@ -151,6 +193,9 @@ a root object type called `settings` is `setting` in a template; `site_name` is
 not a variable; `layout/` is singular; `include` and `render` are not
 interchangeable.
 
+In code mode, `reference/local.md` (C) creates these files in order with
+`archival build` between them, and the rest of this step is the chat path.
+
 Write the files with `archival_write_files`, which takes a batch. Read one back
 with `archival_read_file`, remove one with `archival_delete_files`.
 
@@ -159,9 +204,10 @@ types, real content in them, one page that shows it, and a stylesheet you are
 not done with. Then publish. Everything after that — more pages, media, the
 design — goes faster against something they can already see.
 
-None of this belongs on the machine you are running on. If you do write files
-there — a copy to run the CLI against, notes to yourself — make a new directory
-for them rather than working wherever the session happened to open.
+In chat mode, none of this belongs on the machine you are running on. If you do
+write files there — a copy to run the CLI against, notes to yourself — make a
+new directory for them rather than working wherever the session happened to
+open.
 
 Images and other media do not go in the source. `archival_upload_media` puts
 them on the CDN and hands back the `sha`, `filename`, `mime` and `display_type`
@@ -169,11 +215,13 @@ to write into the object file; archival builds the URL from those.
 
 ## 5. Publish, and give them the link
 
-`archival_publish` builds the site with Archival and puts it live. It is also the
-only check there is — nothing validates a template until this runs — so call it
-as soon as one page renders rather than at the end. A schema or template error
-fails here and comes back as archival's own diagnostic. Fix what it names and
-publish again. Never claim a site works without a successful publish.
+`archival_publish` builds the site with Archival and puts it live. In chat mode
+it is also the only check there is — nothing validates a template until this
+runs — so call it as soon as one page renders rather than at the end. A schema
+or template error fails here and comes back as archival's own diagnostic. Fix
+what it names and publish again. Never claim a site works without a successful
+publish. In code mode the local loop is `archival build`, and publishing happens
+once, at go-live.
 
 Say before the first publish that the site is public and that every publish is
 reviewed. Publish nothing they did not ask for.
@@ -203,18 +251,14 @@ customer. Work in passes, and publish each one.
 - Prefer few, well-made sections over many thin ones.
 - Set the page `<title>` and meta description for every page.
 
-### Optionally, a local preview
+`reference/conventions.md` is the checklist for both modes: content in objects
+rather than markup, the identity object, `archival_editor.toml`, the pages
+machines read (`llms.txt`, a feed, a sitemap), metadata, JSON-LD and
+accessibility. A site that fails it is one the person cannot keep editing.
 
-In a local session, if they want live reload while you work, install the CLI and
-run a copy of the site from a directory of your own:
-
-```bash
-bash "${CLAUDE_PLUGIN_ROOT:-.}/bin/install-archival.sh"
-archival run <site dir>    # rebuilds on change, serves on http://localhost:1024
-```
-
-This is a convenience, not a step, and it needs a shell — in a chat there is
-none. Publishing is what shows them the real thing, and it is what they can
+In code mode, `archival run .` serves the site at `http://localhost:1024` with
+live reload while you work (`reference/local.md`, D). In a chat there is no
+shell; publishing is what shows them the real thing, and it is what they can
 actually open.
 
 ## Scope

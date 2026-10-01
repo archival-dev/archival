@@ -1,11 +1,28 @@
 # Publishing a preview to archival.dev, without the MCP tools
 
-This is the same flow the `archival_*` tools drive, over plain HTTP. Use it when
-the tools are not connected. If they are, use them — they do all of this.
+This is the same flow the `archival_*` tools drive, over plain HTTP.
+
+## When this is the right tool
+
+- **A chat without the tools connected**: use this, provided the shell can
+  reach `api.archival.dev`. A claude.ai sandbox and a Claude Code cloud session
+  cannot (`403` with `x-deny-reason: host_not_allowed`); there, the connector is
+  the only way, so say so and stop.
+- **Code mode, going live**: after a clean local `archival build`, this is how
+  the folder is shipped, once. The shell streams the directory with
+  `find | curl`, where the MCP tools would cost model output per file.
+  `reference/local.md` F is the surrounding procedure.
+- **The tools are connected and there is no shell**: use them. They do all of
+  this.
+
+The token lives in a file, never in a variable or in your output. Shell state
+does not persist between tool calls, and a token that is printed is a token in
+the transcript:
 
 ```bash
 API=https://api.archival.dev
-AUTH="Authorization: Bearer $ARCHIVAL_PUBLISH_TOKEN"
+mkdir -p "$HOME/.archival"
+AUTH="Authorization: Bearer $(sed -n 's/.*"token":"\([^"]*\)".*/\1/p' "$HOME/.archival/preview.json")"
 ```
 
 The token names the preview. **You never send the preview name** — the server
@@ -22,11 +39,18 @@ curl -sS -X POST "$API/previews/self-serve/pair/start" \
 # -> { "code": "K7QM…", "verifyUrl": "https://archival.dev/link?c=K7QM…", "expiresIn": 600 }
 
 # 2. show the person the URL and the code, then poll until this stops being 204
-curl -sS -X POST -d "$CODE" "$API/previews/self-serve/pair/poll"
+(umask 077; curl -sS -o "$HOME/.archival/preview.json" -w '%{http_code}\n' \
+  -X POST -d "$CODE" "$API/previews/self-serve/pair/poll")
 ```
 
-`204` means keep waiting. `200` returns the token, preview name, uploads URL and
-prefix. `404` means the code expired or was already collected.
+`204` means keep waiting. `200` wrote the token, preview name, `url`, uploads URL
+and prefix to the file. `404` means the code expired or was already collected.
+Read the parts you need from the file rather than echoing it:
+
+```bash
+sed -n 's/.*"name":"\([^"]*\)".*/\1/p' "$HOME/.archival/preview.json"
+sed -n 's/.*"uploadPrefix":"\([^"]*\)".*/\1/p' "$HOME/.archival/preview.json"
+```
 
 The code is single-use, expires in ten minutes, and only a person clearing a
 challenge in a browser can approve it. The `slug` is optional and names the
@@ -63,12 +87,16 @@ cd <site dir>
 
 find . -type f \
   -not -path './dist/*' -not -path './.git/*' -not -path './.archival-bin/*' \
+  -not -path './node_modules/*' -not -path './.github/*' -not -name .DS_Store \
   | sed 's|^\./||' \
   | while read -r f; do
       curl -sS -f -X PUT -H "$AUTH" --data-binary "@$f" \
-        "$API/previews/self-serve/file/source/$f" >/dev/null
+        "$API/previews/self-serve/file/source/$f" >/dev/null || echo "failed: $f"
     done
 ```
+
+`.github/` stays out because claiming the preview writes the site's own workflow
+file there.
 
 Uploads are idempotent — re-uploading a path replaces it. To remove a file a
 later edit deleted:
@@ -124,8 +152,10 @@ mime = "image/jpeg"
 display_type = "image"
 ```
 
-Upload the file **before** you publish, or the build renders a URL to something
-that is not there yet.
+`display_type` is `image`, `video`, `audio` or `upload`. Upload the file
+**before** you publish, or the build renders a URL to something that is not
+there yet. Once the site is claimed, `archival upload` replaces all of this
+(`reference/local.md`, E).
 
 ## 3. Build and publish
 
