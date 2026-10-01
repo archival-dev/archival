@@ -15,6 +15,7 @@ use crate::{
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Hash)]
 #[cfg_attr(feature = "typescript", derive(TypeDef))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum ArchivalEvent {
     RenameObject(RenameObjectEvent),
     AddObject(AddObjectEvent),
@@ -151,6 +152,7 @@ pub enum ArchivalEventResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Hash)]
 #[cfg_attr(feature = "typescript", derive(TypeDef))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct EditFieldEvent {
     pub object: String,
     pub filename: String,
@@ -161,6 +163,7 @@ pub struct EditFieldEvent {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "typescript", derive(TypeDef))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct EditOrderEvent {
     pub object: String,
     pub filename: String,
@@ -179,6 +182,7 @@ impl Hash for EditOrderEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Hash)]
 #[cfg_attr(feature = "typescript", derive(TypeDef))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct DeleteObjectEvent {
     pub object: String,
     pub filename: String,
@@ -187,6 +191,7 @@ pub struct DeleteObjectEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Hash)]
 #[cfg_attr(feature = "typescript", derive(TypeDef))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct AddObjectValue {
     pub path: ValuePath,
     pub value: FieldValue,
@@ -194,6 +199,7 @@ pub struct AddObjectValue {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "typescript", derive(TypeDef))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct AddObjectEvent {
     pub object: String,
     pub filename: String,
@@ -212,6 +218,7 @@ impl Hash for AddObjectEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Hash)]
 #[cfg_attr(feature = "typescript", derive(TypeDef))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct AddRootObjectEvent {
     pub object: String,
     pub values: Vec<AddObjectValue>,
@@ -219,17 +226,19 @@ pub struct AddRootObjectEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Hash)]
 #[cfg_attr(feature = "typescript", derive(TypeDef))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct AddChildEvent {
     pub object: String,
     pub filename: String,
     pub path: ValuePath,
     pub values: Vec<AddObjectValue>,
     /// If not provided, this will just append to the end of the child list.
-    pub index: Option<usize>,
+    pub index: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Hash)]
 #[cfg_attr(feature = "typescript", derive(TypeDef))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct RemoveChildEvent {
     pub object: String,
     pub filename: String,
@@ -239,6 +248,7 @@ pub struct RemoveChildEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Hash)]
 #[cfg_attr(feature = "typescript", derive(TypeDef))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct RenameObjectEvent {
     pub object: String,
     pub from: String,

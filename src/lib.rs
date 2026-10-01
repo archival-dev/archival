@@ -3,6 +3,8 @@ mod archival_error;
 mod build_id_tests;
 mod definition_comments;
 pub mod diagnostic;
+#[cfg(feature = "uniffi")]
+mod ffi;
 mod file_system;
 mod file_system_memory;
 mod file_system_mutex;
@@ -90,6 +92,11 @@ pub use object_definition::{FieldDefinition, FieldsMap, ObjectDefinition, Object
 #[cfg(feature = "proto")]
 pub use proto::archival_proto;
 pub use typescript_defs::generate_typescript_defs;
+
+#[cfg(feature = "uniffi")]
+pub use ffi::{FfiFieldValue, FfiMetaEntry, FfiMetaValue};
+#[cfg(feature = "uniffi")]
+uniffi::setup_scaffolding!();
 
 pub type ArchivalBuildId = u64;
 
@@ -698,13 +705,17 @@ impl<F: FileSystemAPI + Clone + Debug> Archival<F> {
         // child is a bare map with every value undefined.
         let child_def = event.path.get_definition(def)?;
         self.write_object(&event.object, &event.filename, |existing| {
-            added_idx = event.path.add_child(existing, event.index, |child| {
-                *child = child_def.empty_object();
-                for value in event.values {
-                    value.path.set_in_tree(child, Some(value.value))?;
-                }
-                Ok(())
-            })?;
+            added_idx = event.path.add_child(
+                existing,
+                event.index.map(|index| index as usize),
+                |child| {
+                    *child = child_def.empty_object();
+                    for value in event.values {
+                        value.path.set_in_tree(child, Some(value.value))?;
+                    }
+                    Ok(())
+                },
+            )?;
             Ok(existing)
         })?;
         Ok(ArchivalEventResponse::Index(added_idx))

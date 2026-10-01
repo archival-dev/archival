@@ -781,7 +781,7 @@ impl From<archival_proto::AddChildEvent> for events::AddChildEvent {
     fn from(value: archival_proto::AddChildEvent) -> Self {
         let idx = match value.index {
             Some(archival_proto::add_child_event::Index::None(_)) => None,
-            Some(archival_proto::add_child_event::Index::Some(i)) => Some(i as usize),
+            Some(archival_proto::add_child_event::Index::Some(i)) => Some(i),
             None => None,
         };
         events::AddChildEvent {
@@ -926,7 +926,7 @@ impl From<events::AddChildEvent> for archival_proto::AddChildEvent {
     fn from(value: events::AddChildEvent) -> Self {
         let index = match value.index {
             None => Some(archival_proto::add_child_event::Index::None(())),
-            Some(i) => Some(archival_proto::add_child_event::Index::Some(i as u32)),
+            Some(i) => Some(archival_proto::add_child_event::Index::Some(i)),
         };
         archival_proto::AddChildEvent {
             object: value.object,

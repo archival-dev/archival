@@ -33,6 +33,8 @@ else
     RUST_LOG=debug cargo test --features=binary $EXTRA_ARGS
     echo "---- features: [no default], typescript"
     RUST_LOG=debug cargo test --no-default-features --features=typescript $EXTRA_ARGS
+    echo "---- features: [no default], uniffi"
+    RUST_LOG=debug cargo test --no-default-features --features=uniffi $EXTRA_ARGS
     echo "---- features: carriers"
     RUST_LOG=debug cargo test --features=carriers $EXTRA_ARGS
     if command -v node >/dev/null 2>&1; then
