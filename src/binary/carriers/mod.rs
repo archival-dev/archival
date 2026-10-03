@@ -5,7 +5,6 @@
 //! `objects` is the site's object tree with `secret` fields included - the
 //! whole point of the feature, and the reason this is not on by default.
 
-pub(crate) mod build;
 pub(crate) mod discovery;
 pub(crate) mod host;
 pub(crate) mod node;
@@ -13,8 +12,7 @@ pub(crate) mod objects;
 pub(crate) mod proxy;
 
 use self::{
-    build::Fingerprints,
-    discovery::{Carrier, CARRIERS_DIR_NAME},
+    discovery::CARRIERS_DIR_NAME,
     host::Sidecar,
     node::NodeInfo,
     objects::CarrierPayload,
@@ -33,10 +31,10 @@ use walkdir::WalkDir;
 
 /// Tracks what each watched carrier file last contained.
 ///
-/// A carrier's own `build` script writes into the directory being watched, so
-/// reacting to every write would rebuild forever. Comparing contents stops that
-/// after one pass, and - unlike ignoring changes for a while after a build -
-/// never drops a real edit.
+/// Tools write into the directory being watched without changing anything - an
+/// editor saving a file as it was, an install rewriting a lockfile - and
+/// reacting to every write would restart the sidecar each time. Comparing
+/// contents never drops a real edit, unlike ignoring changes for a while.
 #[derive(Default)]
 struct SeenContents(BTreeMap<PathBuf, u64>);
 
@@ -149,8 +147,7 @@ impl CarrierSupervisor {
             state: state.clone(),
             sidecar: sidecar.clone(),
             seen: seen.clone(),
-            fingerprints: Fingerprints::default(),
-            entries: BTreeMap::new(),
+            roots: BTreeMap::new(),
             payload: None,
         };
         let handle = thread::spawn(move || worker.run(inbox));
@@ -238,23 +235,19 @@ struct Worker {
     state: Arc<RwLock<ProxyState>>,
     sidecar: Arc<Mutex<Option<Sidecar>>>,
     seen: Arc<Mutex<SeenContents>>,
-    fingerprints: Fingerprints,
-    entries: BTreeMap<String, PathBuf>,
+    /// Each carrier's directory, which the sidecar builds it from.
+    roots: BTreeMap<String, PathBuf>,
     payload: Option<CarrierPayload>,
 }
 
 impl Worker {
     fn run(mut self, inbox: mpsc::Receiver<Message>) {
-        let fingerprints_path =
-            host::harness_dir(&self.site_root).join("install-fingerprints.json");
-        self.fingerprints = Fingerprints::load(&fingerprints_path);
         while let Ok(message) = inbox.recv() {
             match message {
                 Message::Rebuild => {
                     if let Err(e) = self.rebuild() {
                         self.fail(e);
                     }
-                    self.fingerprints.save(&fingerprints_path);
                 }
                 Message::Objects(payload) => {
                     self.payload = Some(*payload);
@@ -279,21 +272,14 @@ impl Worker {
 
     fn rebuild(&mut self) -> Result<()> {
         let node = NodeInfo::detect()?;
-        let carriers = discovery::discover(&self.site_root)?;
-        self.entries.clear();
-        for carrier in &carriers {
-            match self.prepare(&node, carrier) {
-                Ok(entry) => {
-                    self.entries.insert(carrier.name.to_owned(), entry);
-                }
-                // One broken carrier must not stop the others from running.
-                Err(e) => println!(
-                    "{} {}",
-                    style("Carrier skipped:").yellow(),
-                    style(e).yellow()
-                ),
-            }
-        }
+        debug!("carriers run on node {}", node.version);
+        // The sidecar builds a carrier the first time it is asked for, so one
+        // that does not build answers its own requests with why and leaves the
+        // others running.
+        self.roots = discovery::discover(&self.site_root)?
+            .into_iter()
+            .map(|carrier| (carrier.name, carrier.root))
+            .collect();
         let harness = host::write_harness(&host::harness_dir(&self.site_root))?;
         // Before the sidecar reads a single carrier, so that its own reads are
         // measured against what it is about to run.
@@ -305,7 +291,7 @@ impl Worker {
         // waits for the replacement instead of being sent to a dead port.
         *self.state.write().unwrap() = ProxyState::Starting;
         *self.sidecar.lock().unwrap() = None;
-        let sidecar = Sidecar::spawn(&node, &harness, &self.options.node_args, self.options.port)?;
+        let sidecar = Sidecar::spawn(&harness, &self.options.node_args, self.options.port)?;
         sidecar.wait_until_healthy()?;
         *self.sidecar.lock().unwrap() = Some(sidecar);
         self.push_state()?;
@@ -322,7 +308,7 @@ impl Worker {
             "{} {}",
             style("Carriers ready:").green(),
             style(
-                self.entries
+                self.roots
                     .keys()
                     .map(|n| format!("/carriers/{}", n))
                     .collect::<Vec<_>>()
@@ -333,14 +319,6 @@ impl Worker {
         Ok(())
     }
 
-    fn prepare(&mut self, node: &NodeInfo, carrier: &Carrier) -> Result<PathBuf> {
-        let entry = build::prepare(carrier, &mut self.fingerprints)?;
-        if discovery::is_typescript(&entry) && node.strip_types_flags().is_none() {
-            return Err(node.typescript_unsupported(&carrier.name));
-        }
-        Ok(entry)
-    }
-
     fn push_state(&self) -> Result<()> {
         let sidecar = self.sidecar.lock().unwrap();
         let (Some(sidecar), Some(payload)) = (sidecar.as_ref(), &self.payload) else {
@@ -348,7 +326,7 @@ impl Worker {
             // objects. Whichever comes second pushes.
             return Ok(());
         };
-        sidecar.push_state(&self.entries, payload)
+        sidecar.push_state(&self.roots, payload)
     }
 }
 

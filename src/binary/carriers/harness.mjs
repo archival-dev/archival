@@ -1,18 +1,39 @@
 // Hosts a site's carriers for `archival run`. The dev server spawns this and
 // reverse-proxies /carriers/* to it.
 //
-// The request/response half of this file must behave identically to the worker
-// wrapper archival-editor's deploy server generates
-// (api/carriers/deploy-server/deploy-carrier.mjs) - that is what makes a
-// carrier that works locally work once deployed.
+// A carrier is built by the toolchain beside this file (toolchain.mjs, vendored
+// from archival-dev/carriers-toolchain), which is the build every place that
+// runs a carrier shares, and a request is parsed and answered through that
+// toolchain's contract. That is what makes a carrier that works locally work
+// once deployed.
 //
-// Imports nothing but node builtins: it lives outside the site, so a bare
-// specifier here would resolve against the wrong node_modules. A carrier's own
-// imports are unaffected, resolving from the carrier's directory as usual.
+// Imports nothing but node builtins and the toolchain: this file lives outside
+// the site, so a bare specifier here would resolve against the wrong
+// node_modules.
 
 import http from "node:http";
-import { realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import path from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
+import {
+  buildCarrier,
+  carrierFunction,
+  parse,
+  parseRequestBody,
+  strip,
+  toResponse,
+} from "./toolchain.mjs";
+
+export { parseRequestBody, toResponse };
 
 const TOKEN = process.env.ARCHIVAL_CARRIER_TOKEN || "";
 const PORT = Number(process.env.ARCHIVAL_CARRIER_PORT || 0);
@@ -20,9 +41,25 @@ const PORT = Number(process.env.ARCHIVAL_CARRIER_PORT || 0);
 const SHA_RE = /^[a-f0-9]{64}$/i;
 const CARRIER_ROUTE = /^\/carrier\/([A-Za-z0-9_][A-Za-z0-9_.-]*)(?:\/.*)?$/;
 
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+// Where this process writes the modules it builds. Node cannot import source
+// it is only handed, and nothing generated may land in the site.
+const BUILD_DIR = path.join(HERE, `build-${process.pid}`);
+const BUILD_PREFIX = "build-";
+// Package tarballs, kept across restarts: every carrier edit starts a new
+// process, and a lockfile's tarballs never change.
+const PACKAGE_CACHE = path.join(HERE, "packages");
+
+// What a carrier's source can consist of. Everything else in its directory is
+// left out of the build.
+const SOURCE = /\.(?:ts|mts|cts|js|mjs|cjs|json)$/;
+const DECLARATION = /\.d\.[mc]?ts$/;
+// What a deploy writes its own output under, beside the carrier's source.
+const DEPLOY_OUTPUT_PREFIX = "carrier_";
+
 /** The most recent payload pushed by the dev server. */
 let state = null;
-/** entry path -> import promise, so a carrier is only evaluated once. */
+/** carrier name -> build promise, so a carrier is only built and evaluated once. */
 const modules = new Map();
 
 const deepFreeze = (value) => {
@@ -140,99 +177,123 @@ const readBody = (req) =>
   });
 
 /**
- * Only POST and PUT carry a body. A Response is used as the parser so that
- * multipart and urlencoded bodies are decoded by the platform, exactly as they
- * are in a deployed carrier.
+ * A carrier's own files, by path relative to its directory. Installed
+ * dependencies are not read from disk: the build installs what the lockfile
+ * names, which is the same list wherever a carrier is built.
  */
-export const parseRequestBody = async (method, contentType, body) => {
-  if (method !== "POST" && method !== "PUT") {
-    return null;
-  }
-  const type = (contentType || "").toLowerCase();
-  const as = () => new Response(body, { headers: { "content-type": type } });
-  if (type.indexOf("application/json") !== -1) {
-    return as().json();
-  }
-  if (
-    type.indexOf("application/x-www-form-urlencoded") !== -1 ||
-    type.indexOf("multipart/form-data") !== -1 ||
-    type.indexOf("application/form") !== -1
-  ) {
-    const formData = await as().formData();
-    const obj = {};
-    for (const [key, value] of formData.entries()) {
-      obj[key] = value;
+export const readCarrierFiles = (root, base = "") => {
+  const files = new Map();
+  for (const entry of readdirSync(path.join(root, base), {
+    withFileTypes: true,
+  })) {
+    if (
+      entry.name.startsWith(DEPLOY_OUTPUT_PREFIX) ||
+      entry.name.startsWith(".")
+    ) {
+      continue;
     }
-    return obj;
-  }
-  // Fallback: treat everything else as text
-  return as().text();
-};
-
-/** Maps whatever a carrier returned onto a Response. */
-export const toResponse = (result) => {
-  if (result instanceof Response) {
-    return result;
-  }
-  switch (typeof result) {
-    case "object":
-      return new Response(JSON.stringify(result), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    case "string": {
-      const isRedirect = result.startsWith("redirect:");
-      const status = isRedirect ? 302 : 200;
-      const extraHeaders = {};
-      let body = result;
-      if (isRedirect) {
-        body = result.slice(9);
-        extraHeaders["Location"] = body;
+    const relative = base ? `${base}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      if (entry.name === "node_modules") {
+        continue;
       }
-      return new Response(body, {
-        status,
-        headers: {
-          "content-type": "text/plain; charset=utf-8",
-          ...extraHeaders,
-        },
-      });
+      for (const [file, source] of readCarrierFiles(root, relative)) {
+        files.set(file, source);
+      }
+    } else if (
+      entry.isFile() &&
+      SOURCE.test(entry.name) &&
+      !DECLARATION.test(entry.name)
+    ) {
+      files.set(relative, readFileSync(path.join(root, relative), "utf-8"));
     }
-    default:
-      return new Response("Invalid response from carrier: " + result, {
-        status: 500,
-      });
   }
+  return files;
 };
 
-const loadCarrier = (entry) => {
-  let loading = modules.get(entry);
+/** fetch for a package tarball, answered from disk once it has been downloaded. */
+const fetchPackage = async (url) => {
+  const cached = path.join(
+    PACKAGE_CACHE,
+    createHash("sha256").update(url).digest("hex"),
+  );
+  if (existsSync(cached)) {
+    return new Response(readFileSync(cached));
+  }
+  const response = await fetch(url);
+  if (!response.ok) {
+    return response;
+  }
+  const bytes = Buffer.from(await response.arrayBuffer());
+  mkdirSync(PACKAGE_CACHE, { recursive: true });
+  writeFileSync(cached, bytes);
+  return new Response(bytes);
+};
+
+/**
+ * Builds the carrier in `root` and writes its modules under `out`, answering
+ * the function it default-exports.
+ */
+export const buildAndLoad = async (name, root, out) => {
+  const compiled = await buildCarrier({
+    files: readCarrierFiles(root),
+    strip,
+    parse,
+    fetch: fetchPackage,
+  });
+  rmSync(out, { recursive: true, force: true });
+  for (const [modulePath, code] of compiled.modules) {
+    const file = path.join(out, ...modulePath.split("/"));
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, code, "utf-8");
+  }
+  // What makes node read the build's .js files as ES modules.
+  writeFileSync(path.join(out, "package.json"), '{ "type": "module" }\n');
+  const carrier = carrierFunction(
+    await import(
+      pathToFileURL(path.join(out, ...compiled.entry.split("/"))).href
+    ),
+  );
+  if (!carrier) {
+    throw new Error("it does not default-export a function");
+  }
+  return carrier;
+};
+
+const loadCarrier = (name) => {
+  let loading = modules.get(name);
   if (!loading) {
-    // Failures are memoized too: a carrier that throws at import time should
-    // report the same error on every request, not race a half-loaded module.
-    loading = import(pathToFileURL(entry).href);
-    modules.set(entry, loading);
+    // Failures are memoized too: a carrier that fails to build or throws at
+    // import time should report the same error on every request, not race a
+    // half-loaded module.
+    loading = buildAndLoad(
+      name,
+      state.carriers[name],
+      path.join(BUILD_DIR, name),
+    );
+    modules.set(name, loading);
   }
   return loading;
 };
 
 const runCarrier = async (name, req, body) => {
-  const entry = state.carriers[name];
-  if (!entry) {
+  if (!state.carriers[name]) {
     return new Response("No carrier named " + name, { status: 404 });
   }
   const params = new URL(req.url, "http://carrier.local").searchParams;
+  let carrier;
   try {
-    const module = await loadCarrier(entry);
-    const carrier = module.default;
-    if (typeof carrier !== "function") {
-      return new Response(
-        "Carrier " + name + " does not default-export a function",
-        { status: 500 },
-      );
-    }
+    carrier = await loadCarrier(name);
+  } catch (e) {
+    return new Response(
+      "Carrier " + name + " could not be built: " + ((e && e.message) || e),
+      { status: 500 },
+    );
+  }
+  try {
     const parsed = await parseRequestBody(
       req.method,
-      req.headers["content-type"],
+      [["content-type", req.headers["content-type"] || ""]],
       body,
     );
     // UPLOADS has methods, so unlike the rest of the vars it cannot be part of
@@ -309,10 +370,41 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+/**
+ * Node warns that its type stripper is experimental the first time a
+ * TypeScript carrier is built. Every other warning is the carrier author's to
+ * read, so only that one is dropped.
+ */
+const quietTypeStripping = () => {
+  const [print] = process.listeners("warning");
+  process.removeAllListeners("warning");
+  process.on("warning", (warning) => {
+    if (
+      warning.name === "ExperimentalWarning" &&
+      /stripTypeScriptTypes/.test(warning.message)
+    ) {
+      return;
+    }
+    print?.(warning);
+  });
+};
+
+/** Removes what earlier sidecars for this site built, and makes room for this one's. */
+const prepareBuildDir = () => {
+  for (const entry of readdirSync(HERE, { withFileTypes: true })) {
+    if (entry.isDirectory() && entry.name.startsWith(BUILD_PREFIX)) {
+      rmSync(path.join(HERE, entry.name), { recursive: true, force: true });
+    }
+  }
+  mkdirSync(BUILD_DIR, { recursive: true });
+};
+
 export const start = () => {
   // One carrier's unhandled failure must not take down the others.
   process.on("uncaughtException", (e) => console.error("[carrier]", e));
   process.on("unhandledRejection", (e) => console.error("[carrier]", e));
+  quietTypeStripping();
+  prepareBuildDir();
 
   // The dev server holds this pipe open and never writes to it, so this fires
   // even when the parent dies in a way that runs no cleanup.

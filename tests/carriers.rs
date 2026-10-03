@@ -42,6 +42,18 @@ mod carrier_tests {
         true
     }
 
+    /// Whether this node can strip TypeScript's types itself, which is what the
+    /// toolchain builds a `.ts` carrier with.
+    fn node_strips_types() -> bool {
+        let Ok(output) = Command::new("node")
+            .args(["-p", "typeof require('node:module').stripTypeScriptTypes"])
+            .output()
+        else {
+            return false;
+        };
+        String::from_utf8_lossy(&output.stdout).trim() == "function"
+    }
+
     /// Turns "nothing ever answered" into a diagnosis: the binary under test is
     /// shared, and anything that rebuilds it without this feature makes every
     /// carrier route a plain 404.
@@ -281,12 +293,53 @@ mod carrier_tests {
     }
 
     #[test]
-    fn a_carrier_reads_a_secret_the_built_site_never_sees() {
+    fn a_carrier_is_built_the_way_a_deploy_builds_it() {
         if !node_ok() {
             return;
         }
         let server = DevServer::start(site_copy());
-        // A TypeScript carrier, so this also covers node's type stripping.
+
+        if node_strips_types() {
+            let body = DevServer::json(server.get("/carriers/linked?name=tormenta"));
+            assert_eq!(
+                body["greeting"], "hello tormenta!",
+                "its own files are linked, named with an extension or without"
+            );
+            assert_eq!(body["count"], 2, "a json file is imported as its value");
+        }
+
+        let response = server.get("/carriers/commonjs");
+        assert_eq!(response.status(), 500);
+        let message = response.text().unwrap();
+        assert!(
+            message.contains("could not be built") && message.contains("CommonJS"),
+            "a commonjs carrier is refused, as a deploy refuses it: {}",
+            message
+        );
+
+        let response = server.get("/carriers/builtin");
+        assert_eq!(response.status(), 500);
+        let message = response.text().unwrap();
+        assert!(
+            message.contains("node:fs") && message.contains("Node built-in"),
+            "a node built-in is refused by name: {}",
+            message
+        );
+
+        assert_eq!(
+            server.get("/carriers/echo").status(),
+            200,
+            "a carrier that does not build leaves the others running"
+        );
+    }
+
+    #[test]
+    fn a_carrier_reads_a_secret_the_built_site_never_sees() {
+        if !node_ok() || !node_strips_types() {
+            return;
+        }
+        let server = DevServer::start(site_copy());
+        // A TypeScript carrier, so this also covers the toolchain's type stripping.
         let response = server.get("/carriers/typed");
         let status = response.status();
         let body = response.text().unwrap_or_default();

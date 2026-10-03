@@ -1,17 +1,14 @@
-//! Locating node and deciding how to run TypeScript on it.
+//! Locating node.
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use semver::Version;
 use std::process::Command;
 use thiserror::Error;
 
 /// Carriers use `fetch`, `Blob`, `FormData` and a global `File`, all of which
-/// are stable from 20.
+/// are stable from 20. A TypeScript carrier needs a node that can strip types
+/// itself, which the toolchain reports when it builds one.
 const MINIMUM: Version = Version::new(20, 0, 0);
-/// Type stripping arrived behind a flag here.
-const STRIP_TYPES_FLAGGED: Version = Version::new(22, 6, 0);
-/// ...and became the default here.
-const STRIP_TYPES_DEFAULT: Version = Version::new(22, 18, 0);
 
 #[derive(Error, Debug)]
 pub(crate) enum NodeError {
@@ -35,39 +32,19 @@ impl NodeInfo {
             .output()
             .map_err(|_| NodeError::NotFound)?;
         let printed = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        Self::from_version(&printed)
+    }
+
+    fn from_version(printed: &str) -> Result<Self> {
         let version = printed
             .strip_prefix('v')
-            .unwrap_or(&printed)
+            .unwrap_or(printed)
             .parse::<Version>()
-            .map_err(|_| NodeError::UnknownVersion(printed))?;
+            .map_err(|_| NodeError::UnknownVersion(printed.to_string()))?;
         if version < MINIMUM {
             return Err(NodeError::TooOld(version).into());
         }
         Ok(Self { version })
-    }
-
-    /// The flags needed to import a TypeScript carrier directly. `None` means
-    /// this node cannot, and the carrier needs a `build` script instead.
-    pub fn strip_types_flags(&self) -> Option<Vec<String>> {
-        if self.version >= STRIP_TYPES_DEFAULT {
-            Some(vec![])
-        } else if self.version >= STRIP_TYPES_FLAGGED {
-            Some(vec![
-                "--experimental-strip-types".to_string(),
-                "--no-warnings".to_string(),
-            ])
-        } else {
-            None
-        }
-    }
-
-    pub fn typescript_unsupported(&self, carrier: &str) -> anyhow::Error {
-        anyhow!(
-            "carrier `{carrier}` is TypeScript, which needs Node >= {STRIP_TYPES_FLAGGED} \
-             (you have {}). Upgrade node, or add a `build` script to \
-             carriers/{carrier}/package.json.",
-            self.version
-        )
     }
 }
 
@@ -75,31 +52,13 @@ impl NodeInfo {
 mod tests {
     use super::*;
 
-    fn flags(major: u64, minor: u64, patch: u64) -> Option<Vec<String>> {
-        NodeInfo {
-            version: Version::new(major, minor, patch),
-        }
-        .strip_types_flags()
-    }
-
     #[test]
-    fn typescript_needs_22_6() {
-        assert_eq!(flags(20, 0, 0), None);
-        assert_eq!(flags(22, 5, 0), None);
-        assert!(flags(22, 6, 0).is_some());
-    }
-
-    #[test]
-    fn the_flag_is_dropped_once_stripping_is_the_default() {
+    fn a_node_older_than_the_minimum_is_refused() {
+        assert!(NodeInfo::from_version("v18.19.0").is_err());
+        assert!(NodeInfo::from_version("not a version").is_err());
         assert_eq!(
-            flags(22, 6, 0),
-            Some(vec![
-                "--experimental-strip-types".to_string(),
-                "--no-warnings".to_string()
-            ])
+            NodeInfo::from_version("v22.13.0").unwrap().version,
+            Version::new(22, 13, 0)
         );
-        assert_eq!(flags(22, 17, 0).unwrap().len(), 2);
-        assert_eq!(flags(22, 18, 0), Some(vec![]));
-        assert_eq!(flags(24, 0, 0), Some(vec![]));
     }
 }

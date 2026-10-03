@@ -1,7 +1,7 @@
-//! Finding the carriers in a site and resolving each one's entry file.
+//! Finding the carriers in a site and naming each one's entry file.
 //!
-//! Mirrors `resolveMainFile` in archival-editor's deploy server, so a carrier
-//! that runs locally is the same file that gets deployed.
+//! A carrier is built by the toolchain, which resolves the entry itself; the
+//! resolution here mirrors it for `archival carriers list`.
 
 use anyhow::Result;
 use std::{
@@ -11,17 +11,11 @@ use std::{
 
 pub(crate) const CARRIERS_DIR_NAME: &str = "carriers";
 
-const TS_EXTENSIONS: &[&str] = &["ts", "mts", "cts"];
-const JS_EXTENSIONS: &[&str] = &["js", "mjs", "cjs"];
+const TS_EXTENSIONS: &[&str] = &["ts", "mts"];
+const JS_EXTENSIONS: &[&str] = &["js", "mjs"];
 
 fn main_extensions() -> impl Iterator<Item = &'static str> {
     TS_EXTENSIONS.iter().chain(JS_EXTENSIONS).copied()
-}
-
-pub(crate) fn is_typescript(file: &Path) -> bool {
-    file.extension()
-        .map(|e| e.to_string_lossy().to_lowercase())
-        .is_some_and(|e| TS_EXTENSIONS.contains(&e.as_str()))
 }
 
 /// A carrier directory name doubles as a URL path segment and as a lookup key
@@ -39,7 +33,6 @@ pub(crate) fn is_valid_name(name: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PackageJson {
     pub main: Option<String>,
-    pub has_build_script: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,12 +40,9 @@ pub(crate) struct Carrier {
     pub name: String,
     pub root: PathBuf,
     pub package: Option<PackageJson>,
-    /// The `package-lock.json` or `npm-shrinkwrap.json` this carrier installs from.
-    pub lockfile: Option<PathBuf>,
 }
 
 impl Carrier {
-    /// Resolved after install, so a package's install hooks can generate it.
     pub fn entry(&self) -> Option<PathBuf> {
         resolve_entry(
             &self.root,
@@ -92,10 +82,6 @@ pub(crate) fn discover(site_root: &Path) -> Result<Vec<Carrier>> {
         let root = entry.path();
         carriers.push(Carrier {
             package: read_package(&root),
-            lockfile: ["package-lock.json", "npm-shrinkwrap.json"]
-                .iter()
-                .map(|f| root.join(f))
-                .find(|f| f.is_file()),
             name,
             root,
         });
@@ -112,7 +98,6 @@ fn read_package(root: &Path) -> Option<PackageJson> {
             .get("main")
             .and_then(|m| m.as_str())
             .map(str::to_string),
-        has_build_script: parsed.get("scripts").and_then(|s| s.get("build")).is_some(),
     })
 }
 
@@ -159,7 +144,7 @@ mod tests {
         assert_eq!(
             resolve_entry(dir.path(), None),
             Some(dir.path().join("index.ts")),
-            "typescript is preferred, matching the deploy server"
+            "typescript is preferred, matching the toolchain"
         );
     }
 
@@ -202,34 +187,26 @@ mod tests {
     }
 
     #[test]
-    fn discovery_reads_packages_and_lockfiles() {
+    fn discovery_reads_each_carrier_and_its_main() {
         let dir = carrier_dir(&[
             ("carriers/echo/index.js", ""),
-            (
-                "carriers/build-me/package.json",
-                r#"{"main":"dist/main.js","scripts":{"build":"tsc"}}"#,
-            ),
-            ("carriers/build-me/package-lock.json", "{}"),
+            ("carriers/named/package.json", r#"{"main":"src/main.ts"}"#),
             ("carriers/.hidden/index.js", ""),
             ("carriers/loose-file.js", ""),
         ]);
         let carriers = discover(dir.path()).unwrap();
         assert_eq!(
             carriers.iter().map(|c| &c.name).collect::<Vec<_>>(),
-            vec!["build-me", "echo"],
+            vec!["echo", "named"],
             "dotted dirs and loose files are not carriers"
         );
-        let build_me = &carriers[0];
+        assert!(carriers[0].package.is_none());
         assert_eq!(
-            build_me.package,
+            carriers[1].package,
             Some(PackageJson {
-                main: Some("dist/main.js".to_string()),
-                has_build_script: true,
+                main: Some("src/main.ts".to_string()),
             })
         );
-        assert!(build_me.lockfile.is_some());
-        assert!(carriers[1].package.is_none());
-        assert!(carriers[1].lockfile.is_none());
     }
 
     #[test]

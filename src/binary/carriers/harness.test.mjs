@@ -1,116 +1,113 @@
-// Covers the two halves most likely to drift from the worker wrapper
-// archival-editor's deploy server generates: how a request body is parsed, and
-// how a carrier's return value becomes a response.
+// Covers what the harness adds around the toolchain: which files of a carrier
+// directory are its source, and that a carrier is built and loaded the way the
+// toolchain says rather than by node's own loader.
 //
 // Run with: node --test src/binary/carriers/harness.test.mjs
 
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
-import { parseRequestBody, toResponse } from "./harness.mjs";
+import {
+  buildAndLoad,
+  parseRequestBody,
+  readCarrierFiles,
+  toResponse,
+} from "./harness.mjs";
+import * as toolchain from "./toolchain.mjs";
 
-test("only POST and PUT carry a body", async () => {
-  for (const method of ["GET", "HEAD", "DELETE", "OPTIONS"]) {
-    assert.equal(
-      await parseRequestBody(method, "application/json", '{"a":1}'),
-      null,
-    );
+const dirs = [];
+test.after(() => {
+  for (const dir of dirs) {
+    rmSync(dir, { recursive: true, force: true });
   }
-  assert.deepEqual(await parseRequestBody("POST", "application/json", '{"a":1}'), {
-    a: 1,
-  });
-  assert.deepEqual(await parseRequestBody("PUT", "application/json", '{"a":1}'), {
-    a: 1,
-  });
 });
 
-test("form bodies arrive as a flat object", async () => {
+const carrier = (files) => {
+  const dir = mkdtempSync(path.join(tmpdir(), "archival-harness-"));
+  dirs.push(dir);
+  for (const [file, source] of Object.entries(files)) {
+    const target = path.join(dir, "src", file);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, source);
+  }
+  return { root: path.join(dir, "src"), out: path.join(dir, "out") };
+};
+
+const typescript = {
+  skip: !toolchain.supported && "this node cannot strip types",
+};
+
+test("a request is parsed and answered by the toolchain's contract", async () => {
+  assert.equal(parseRequestBody, toolchain.parseRequestBody);
+  assert.equal(toResponse, toolchain.toResponse);
   assert.deepEqual(
     await parseRequestBody(
       "POST",
-      "application/x-www-form-urlencoded",
-      "name=Tormenta&genre=rock",
+      [["content-type", "application/json; charset=utf-8"]],
+      Buffer.from('{"a":1}'),
     ),
-    { name: "Tormenta", genre: "rock" },
-  );
-});
-
-test("multipart bodies arrive as a flat object", async () => {
-  const form = new FormData();
-  form.set("name", "Tormenta");
-  const request = new Request("http://carrier.local", {
-    method: "POST",
-    body: form,
-  });
-  const body = Buffer.from(await request.arrayBuffer());
-  assert.deepEqual(
-    await parseRequestBody("POST", request.headers.get("content-type"), body),
-    { name: "Tormenta" },
-  );
-});
-
-test("an unrecognized content type is delivered as text", async () => {
-  assert.equal(
-    await parseRequestBody("POST", "text/plain", "just words"),
-    "just words",
-  );
-  assert.equal(await parseRequestBody("POST", undefined, "no type"), "no type");
-});
-
-test("a charset does not stop a json body being parsed", async () => {
-  assert.deepEqual(
-    await parseRequestBody("POST", "application/json; charset=utf-8", '{"a":1}'),
     { a: 1 },
   );
+  assert.equal(toResponse("redirect:/login").headers.get("location"), "/login");
 });
 
-test("an object is sent as json", async () => {
-  const response = toResponse({ hello: "world" });
-  assert.equal(response.status, 200);
-  assert.equal(response.headers.get("content-type"), "application/json");
-  assert.deepEqual(await response.json(), { hello: "world" });
+test("a carrier's source leaves out what a build never reads", () => {
+  const { root } = carrier({
+    "index.ts": "",
+    "lib/util.js": "",
+    "data.json": "{}",
+    "package.json": "{}",
+    "archival-objects.d.ts": "",
+    "README.md": "",
+    "node_modules/dep/index.js": "",
+    ".cache/x.js": "",
+    "carrier_abc/index.ts.js": "",
+    "carrier_abc.jsonc": "",
+  });
+  assert.deepEqual([...readCarrierFiles(root).keys()].sort(), [
+    "data.json",
+    "index.ts",
+    "lib/util.js",
+    "package.json",
+  ]);
 });
 
-test("an array is sent as json", async () => {
-  const response = toResponse([1, 2]);
-  assert.equal(response.headers.get("content-type"), "application/json");
-  assert.deepEqual(await response.json(), [1, 2]);
+test("a typescript carrier is built and loaded", typescript, async () => {
+  const { root, out } = carrier({
+    "index.ts": `import { greet } from "./lib/greet";\nimport data from "./data.json";\nexport default (params: URLSearchParams) => greet(params.get("name")) + data.mark;`,
+    "lib/greet.ts": `export const greet = (name: string | null): string => "hi " + name;`,
+    "data.json": `{"mark":"!"}`,
+  });
+  const run = await buildAndLoad("echo", root, out);
+  assert.equal(run(new URLSearchParams("name=sam")), "hi sam!");
 });
 
-test("a string is sent as text", async () => {
-  const response = toResponse("hi");
-  assert.equal(response.status, 200);
-  assert.equal(
-    response.headers.get("content-type"),
-    "text/plain; charset=utf-8",
+test("what a deploy would refuse is refused here, by name", async () => {
+  const commonjs = carrier({ "index.js": `module.exports = () => 1;` });
+  await assert.rejects(
+    buildAndLoad("commonjs", commonjs.root, commonjs.out),
+    /CommonJS/,
   );
-  assert.equal(await response.text(), "hi");
-});
-
-test("a redirect: prefix becomes a 302", async () => {
-  const response = toResponse("redirect:/login");
-  assert.equal(response.status, 302);
-  assert.equal(response.headers.get("location"), "/login");
-  assert.equal(await response.text(), "/login");
-});
-
-test("a Response is passed through untouched", () => {
-  const original = new Response("body", { status: 418 });
-  assert.equal(toResponse(original), original);
-});
-
-test("anything else is a 500", async () => {
-  for (const value of [undefined, 42, true]) {
-    assert.equal(toResponse(value).status, 500);
-  }
-  assert.match(
-    await toResponse(42).text(),
-    /^Invalid response from carrier: 42$/,
+  const builtin = carrier({
+    "index.js": `import fs from "node:fs";\nexport default () => fs;`,
+  });
+  await assert.rejects(
+    buildAndLoad("builtin", builtin.root, builtin.out),
+    /node:fs.*Node built-in/s,
   );
-});
-
-test("null is json, matching typeof null === object", async () => {
-  // Deliberately the same quirk the deployed wrapper has.
-  const response = toResponse(null);
-  assert.equal(response.status, 200);
-  assert.equal(await response.text(), "null");
+  const unlocked = carrier({
+    "index.js": `import pad from "left-pad";\nexport default () => pad;`,
+    "package.json": `{"dependencies":{"left-pad":"1.3.0"}}`,
+  });
+  await assert.rejects(
+    buildAndLoad("unlocked", unlocked.root, unlocked.out),
+    /package-lock\.json/,
+  );
+  const value = carrier({ "index.js": `export default 42;` });
+  await assert.rejects(
+    buildAndLoad("value", value.root, value.out),
+    /default-export a function/,
+  );
 });

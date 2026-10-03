@@ -1,7 +1,7 @@
 //! The node sidecar: spawning it, waiting for it, pushing state to it, and
 //! making sure it dies with the dev server.
 
-use super::{node::NodeInfo, objects::CarrierPayload};
+use super::objects::CarrierPayload;
 use anyhow::{anyhow, Result};
 use nanoid::nanoid;
 use serde::Serialize;
@@ -17,11 +17,15 @@ use tracing::warn;
 
 const HARNESS: &str = include_str!("harness.mjs");
 const HARNESS_FILE_NAME: &str = "harness.mjs";
+/// The carrier build toolchain, vendored by `update-carriers-toolchain.sh`. The
+/// harness imports it from beside itself.
+const TOOLCHAIN: &str = include_str!("toolchain.mjs");
+const TOOLCHAIN_FILE_NAME: &str = "toolchain.mjs";
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(10);
 const HEALTH_POLL: Duration = Duration::from_millis(20);
 
-/// What the harness is told to serve. `carriers` maps a name to the absolute
-/// entry file to import.
+/// What the harness is told to serve. `carriers` maps a name to the directory
+/// the carrier is built from.
 #[derive(Debug, Clone, Serialize)]
 struct State<'a> {
     carriers: &'a BTreeMap<String, PathBuf>,
@@ -48,6 +52,7 @@ pub(crate) fn write_harness(dir: &Path) -> Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
     let path = dir.join(HARNESS_FILE_NAME);
     std::fs::write(&path, HARNESS)?;
+    std::fs::write(dir.join(TOOLCHAIN_FILE_NAME), TOOLCHAIN)?;
     Ok(path)
 }
 
@@ -62,15 +67,9 @@ pub(crate) struct Sidecar {
 }
 
 impl Sidecar {
-    pub fn spawn(
-        node: &NodeInfo,
-        harness: &Path,
-        extra_args: &[String],
-        port: Option<u16>,
-    ) -> Result<Self> {
+    pub fn spawn(harness: &Path, extra_args: &[String], port: Option<u16>) -> Result<Self> {
         let token = nanoid!();
-        let mut args = node.strip_types_flags().unwrap_or_default();
-        args.extend(extra_args.iter().cloned());
+        let mut args = extra_args.to_vec();
         args.push(harness.to_string_lossy().into_owned());
         let mut child = Command::new("node")
             .args(&args)
@@ -232,5 +231,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_harness(dir.path()).unwrap();
         assert_eq!(std::fs::read_to_string(path).unwrap(), HARNESS);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(TOOLCHAIN_FILE_NAME)).unwrap(),
+            TOOLCHAIN,
+            "the harness imports the toolchain from beside itself"
+        );
     }
 }
