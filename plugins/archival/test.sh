@@ -5,6 +5,10 @@
 # so the test also proves the token never reaches the output.
 set -euo pipefail
 
+# Git exports these to a hook run from a linked worktree, and they would make
+# every fixture directory read as that repository.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 for script in bin/install-archival.sh bin/site-info.sh hooks/session-start.sh test.sh; do
