@@ -20,6 +20,8 @@ pub enum ValuePathError {
     NotFound(ValuePath, String),
     #[error("Child path was missing an index {0}")]
     ChildPathMissingIndex(String),
+    #[error("Index in {0} is past the end of a child list holding {1}")]
+    IndexOutOfRange(ValuePath, usize),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Hash, Eq, PartialEq)]
@@ -220,7 +222,7 @@ impl ValuePath {
         ValuePath(self.0[1..].to_vec())
     }
     pub fn without_last(&self) -> ValuePath {
-        ValuePath(self.0[..1].to_vec())
+        ValuePath(self.0[..self.0.len().saturating_sub(1)].to_vec())
     }
 
     pub fn pop(&mut self) -> Option<ValuePathComponent> {
@@ -465,23 +467,36 @@ impl ValuePath {
     ) -> Result<usize, ValuePathError> {
         let mut new_child = BTreeMap::new();
         modify(&mut new_child)?;
-        self.modify_children(object, |children| {
-            if let Some(index) = index {
+        self.modify_children(object, |children| match index {
+            Some(index) if index > children.len() => Err(ValuePathError::IndexOutOfRange(
+                self.clone().append(ValuePathComponent::Index(index)),
+                children.len(),
+            )),
+            Some(index) => {
                 children.insert(index, new_child);
-                index
-            } else {
-                children.push(new_child);
-                children.len() - 1
+                Ok(index)
             }
-        })
+            None => {
+                children.push(new_child);
+                Ok(children.len() - 1)
+            }
+        })?
     }
 
     pub fn remove_child(&mut self, object: &mut Object) -> Result<(), ValuePathError> {
         if let Some(component) = self.pop() {
             match component {
                 ValuePathComponent::Index(index) => self.modify_children(object, |children| {
-                    children.remove(index);
-                }),
+                    if index < children.len() {
+                        children.remove(index);
+                        Ok(())
+                    } else {
+                        Err(ValuePathError::IndexOutOfRange(
+                            self.clone().append(component),
+                            children.len(),
+                        ))
+                    }
+                })?,
                 ValuePathComponent::Key(_) => Err(ValuePathError::ChildPathMissingIndex(
                     self.clone().append(component).to_string(),
                 )),
@@ -753,6 +768,53 @@ pub mod tests {
             let val = o.last().unwrap().get("name");
             assert_eq!(val.unwrap(), &new_val);
         }
+    }
+
+    fn child_count(obj: &Object) -> usize {
+        ValuePath::from_string("children")
+            .get_children(obj)
+            .map_or(0, Vec::len)
+    }
+
+    #[test]
+    fn add_child_past_the_end_is_an_error() {
+        let mut obj = object();
+        let result = ValuePath::from_string("children").add_child(&mut obj, Some(3), |_| Ok(()));
+        assert!(
+            matches!(result, Err(ValuePathError::IndexOutOfRange(ref path, 2)) if path.to_string() == "children.3"),
+            "{result:?}"
+        );
+        assert_eq!(child_count(&obj), 2);
+        ValuePath::from_string("children")
+            .add_child(&mut obj, Some(2), |_| Ok(()))
+            .unwrap();
+        assert_eq!(child_count(&obj), 3);
+    }
+
+    #[test]
+    fn remove_child_past_the_end_is_an_error() {
+        let mut obj = object();
+        let result = ValuePath::from_string("children.2").remove_child(&mut obj);
+        assert!(
+            matches!(result, Err(ValuePathError::IndexOutOfRange(ref path, 2)) if path.to_string() == "children.2"),
+            "{result:?}"
+        );
+        assert_eq!(child_count(&obj), 2);
+        ValuePath::from_string("children.1")
+            .remove_child(&mut obj)
+            .unwrap();
+        assert_eq!(child_count(&obj), 1);
+    }
+
+    #[test]
+    fn without_last_drops_only_the_last_component() {
+        assert_eq!(
+            ValuePath::from_string("children.1.items.2")
+                .without_last()
+                .to_string(),
+            "children.1.items"
+        );
+        assert_eq!(ValuePath::empty().without_last(), ValuePath::empty());
     }
 
     #[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
