@@ -304,7 +304,7 @@ mod carrier_tests {
         assert_eq!(body["url"], server.url(""), "the site is its own argument");
         assert_eq!(
             body["site"],
-            serde_json::json!(["url", "uploads", "email", "sql"])
+            serde_json::json!(["url", "uploads", "email", "sql", "activitypub"])
         );
     }
 

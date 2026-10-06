@@ -136,6 +136,16 @@ test("each carrier API version is called its own way", async () => {
     site.sql.exec("SELECT 1"),
     /site\.sql is not available in archival run/,
   );
+  assert.equal(await site.activitypub.account(), null);
+  assert.deepEqual(await site.activitypub.replies({ path: "artist/a" }), {
+    items: [],
+    total: 0,
+    next: null,
+  });
+  await assert.rejects(
+    site.activitypub.likes({ name: "no path" }),
+    /site\.activitypub needs a post/,
+  );
 });
 
 test("what a deploy would refuse is refused here, by name", async () => {

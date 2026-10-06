@@ -183,6 +183,40 @@ const makeSql = (name) => {
 };
 
 /**
+ * A local run has no fediverse presence, so it reads as a site that does not
+ * federate, as a deployed carrier's facade does with no site behind it.
+ */
+const makeActivityPub = (name) => {
+  const postPath = (post) => {
+    const path = post && typeof post === "object" ? post.path : post;
+    if (typeof path !== "string" || !path) {
+      throw new Error(name + " needs a post: one of your objects, or its path");
+    }
+    return path;
+  };
+  const emptyPage = async (post) => {
+    postPath(post);
+    return { items: [], total: 0, next: null };
+  };
+  return Object.freeze({
+    account: async () => null,
+    followers: async () => ({ items: [], total: 0, next: null }),
+    counts: async (posts) => {
+      if (!Array.isArray(posts)) {
+        throw new Error(name + ".counts takes a list of posts");
+      }
+      return posts.map((post) => {
+        postPath(post);
+        return { likes: 0, boosts: 0, replies: 0 };
+      });
+    },
+    likes: emptyPage,
+    boosts: emptyPage,
+    replies: emptyPage,
+  });
+};
+
+/**
  * How a carrier written against each carrier API version is called, given the
  * pushed state. A carrier names its version in its package.json, as
  * `"archival": { "carrier": 2 }`.
@@ -216,6 +250,7 @@ const CARRIER_CALLS = new Map([
           uploads: makeUploads("site.uploads", current),
           email: makeEmail("site.email"),
           sql: makeSql("site.sql"),
+          activitypub: makeActivityPub("site.activitypub"),
         }),
       ),
   ],
