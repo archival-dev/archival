@@ -608,10 +608,7 @@ impl FieldValue {
         };
         self.run_custom_validation(path, field_type, custom_types)?;
         // After we've run custom validation, aliases should just be dereferenced.
-        let field_type = match field_type {
-            FieldType::Alias(val) => &val.0,
-            _ => field_type,
-        };
+        let field_type = field_type.base_type();
         match self {
             // Oneof needs special checking since we need to validate the inner
             // type and the type name against the valid options
@@ -632,7 +629,8 @@ impl FieldValue {
                             )
                         })?;
                     if let Some(v) = value.as_ref() {
-                        v.validate_type(path, &found_type.r#type)
+                        v.run_custom_validation(path, &found_type.r#type, custom_types)?;
+                        v.validate_type(path, found_type.r#type.base_type())
                     } else {
                         // Empty is ok for all values
                         Ok(())
@@ -1943,6 +1941,81 @@ mod validate_tests {
             .validate(&path, post_def, &EditorTypes::new())
             .unwrap_err();
         assert!(matches!(err, FieldValueValidationError::TypeMismatch(_, p, _) if p == path));
+    }
+
+    fn aliased_post() -> (ObjectDefinition, EditorTypes) {
+        let editor_types = crate::manifest::Manifest::from_string(
+            std::path::Path::new(""),
+            r#"
+[editor_types.photo]
+type = "image"
+
+[editor_types.slug]
+type = "string"
+validate = ['^[a-z-]+$']
+
+[editor_types.short_slug]
+type = "slug"
+"#
+            .to_string(),
+            None,
+        )
+        .unwrap()
+        .editor_types;
+        let object_definitions = ObjectDefinition::from_source(
+            r#"
+[post]
+handle = "short_slug"
+[[post.media]]
+name = "photo"
+type = "photo"
+[[post.media]]
+name = "slug"
+type = "slug"
+"#,
+            &editor_types,
+        )
+        .unwrap();
+        let post_def = object_definitions.get("post").unwrap().clone();
+        (post_def, editor_types)
+    }
+
+    #[test]
+    fn aliased_oneof_option_accepts_its_base_type() {
+        let (post_def, editor_types) = aliased_post();
+        let v = FieldValue::Oneof((
+            "photo".to_string(),
+            Box::new(Some(FieldValue::File(File::image()))),
+        ));
+        v.validate(&ValuePath::from_string("media"), &post_def, &editor_types)
+            .unwrap();
+    }
+
+    #[test]
+    fn aliased_oneof_option_runs_its_validators() {
+        let (post_def, editor_types) = aliased_post();
+        let path = ValuePath::from_string("media");
+        let valid = FieldValue::Oneof((
+            "slug".to_string(),
+            Box::new(Some(FieldValue::String("a-slug".to_string()))),
+        ));
+        valid.validate(&path, &post_def, &editor_types).unwrap();
+        let invalid = FieldValue::Oneof((
+            "slug".to_string(),
+            Box::new(Some(FieldValue::String("Not A Slug".to_string()))),
+        ));
+        let err = invalid
+            .validate(&path, &post_def, &editor_types)
+            .unwrap_err();
+        assert!(matches!(err, FieldValueValidationError::FailedValidation(_, p, _) if p == path));
+    }
+
+    #[test]
+    fn alias_of_alias_accepts_its_base_type() {
+        let (post_def, editor_types) = aliased_post();
+        FieldValue::String("a-slug".to_string())
+            .validate(&ValuePath::from_string("handle"), &post_def, &editor_types)
+            .unwrap();
     }
 }
 
