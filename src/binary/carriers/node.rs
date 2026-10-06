@@ -5,10 +5,9 @@ use semver::Version;
 use std::process::Command;
 use thiserror::Error;
 
-/// Carriers use `fetch`, `Blob`, `FormData` and a global `File`, all of which
-/// are stable from 20. A TypeScript carrier needs a node that can strip types
-/// itself, which the toolchain reports when it builds one.
-const MINIMUM: Version = Version::new(20, 0, 0);
+/// The first Node with both `module.stripTypeScriptTypes`, which builds a
+/// TypeScript carrier, and an unflagged `node:sqlite`, which `site.sql` runs on.
+const MINIMUM: Version = Version::new(22, 13, 0);
 
 #[derive(Error, Debug)]
 pub(crate) enum NodeError {
@@ -55,6 +54,7 @@ mod tests {
     #[test]
     fn a_node_older_than_the_minimum_is_refused() {
         assert!(NodeInfo::from_version("v18.19.0").is_err());
+        assert!(NodeInfo::from_version("v22.12.0").is_err());
         assert!(NodeInfo::from_version("not a version").is_err());
         assert_eq!(
             NodeInfo::from_version("v22.13.0").unwrap().version,

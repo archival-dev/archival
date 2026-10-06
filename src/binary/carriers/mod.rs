@@ -4,9 +4,8 @@
 //! `/carriers/<name>`. It default-exports `(params, body, objects, site)`
 //! (or `(params, body, objects)` for a carrier whose package.json names no
 //! carrier API version), where `objects` is the site's object tree with
-//! `secret` fields included - the whole point of the feature, and the reason
-//! this is not on by default. `site.sql` is a SQLite file in the build
-//! directory, which every carrier shares.
+//! `secret` fields included - the whole point of the feature. `site.sql` is a
+//! SQLite file in the build directory, which every carrier shares.
 
 pub(crate) mod discovery;
 pub(crate) mod host;
@@ -125,24 +124,17 @@ pub(crate) struct CarrierSupervisor {
 }
 
 impl CarrierSupervisor {
-    /// `None` when this site has no carriers, or they were turned off. The dev
-    /// server then behaves exactly as it does without the feature.
+    /// `None` when carriers were turned off. A site with no carriers yet still
+    /// gets one, idle until the first carrier is added.
     pub fn new(site_root: &Path, build_dir: &Path, options: CarrierOptions) -> Option<Self> {
         if options.disabled {
             return None;
         }
-        match discovery::discover(site_root) {
-            Ok(carriers) if carriers.is_empty() => None,
-            Ok(_) => Some(Self::start(
-                site_root.to_path_buf(),
-                build_dir.join(DATABASE_FILE_NAME),
-                options,
-            )),
-            Err(e) => {
-                warn!("couldn't read {}/: {}", CARRIERS_DIR_NAME, e);
-                None
-            }
-        }
+        Some(Self::start(
+            site_root.to_path_buf(),
+            build_dir.join(DATABASE_FILE_NAME),
+            options,
+        ))
     }
 
     fn start(site_root: PathBuf, database: PathBuf, options: CarrierOptions) -> Self {
@@ -172,6 +164,10 @@ impl CarrierSupervisor {
         };
         supervisor.send(Message::Rebuild);
         supervisor
+    }
+
+    pub fn is_idle(&self) -> bool {
+        matches!(*self.state.read().unwrap(), ProxyState::Idle)
     }
 
     pub fn proxy(&self) -> Arc<CarrierProxy> {
@@ -282,8 +278,6 @@ impl Worker {
     }
 
     fn rebuild(&mut self) -> Result<()> {
-        let node = NodeInfo::detect()?;
-        debug!("carriers run on node {}", node.version);
         // The sidecar builds a carrier the first time it is asked for, so one
         // that does not build answers its own requests with why and leaves the
         // others running.
@@ -291,6 +285,14 @@ impl Worker {
             .into_iter()
             .map(|carrier| (carrier.name, carrier.root))
             .collect();
+        if self.roots.is_empty() {
+            self.seen.lock().unwrap().prime(&self.site_root);
+            *self.state.write().unwrap() = ProxyState::Idle;
+            *self.sidecar.lock().unwrap() = None;
+            return Ok(());
+        }
+        let node = NodeInfo::detect()?;
+        debug!("carriers run on node {}", node.version);
         let harness = host::write_harness(&host::harness_dir(&self.site_root))?;
         // Before the sidecar reads a single carrier, so that its own reads are
         // measured against what it is about to run.

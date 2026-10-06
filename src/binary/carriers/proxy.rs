@@ -44,8 +44,12 @@ const HOP_BY_HOP: &[&str] = &[
 
 #[derive(Debug, Clone)]
 pub(crate) enum ProxyState {
+    /// The site has no carriers, so every request is left to the static server.
+    Idle,
     Starting,
-    Ready { port: u16 },
+    Ready {
+        port: u16,
+    },
     Failed(String),
 }
 
@@ -131,6 +135,9 @@ impl CarrierProxy {
         loop {
             match &*self.state.read().unwrap() {
                 ProxyState::Ready { port } => return Ok(*port),
+                ProxyState::Idle => {
+                    return Err(Response::from_string("Not Found").with_status_code(404))
+                }
                 ProxyState::Failed(message) => {
                     return Err(Response::from_string(message.to_owned()).with_status_code(502))
                 }
@@ -288,6 +295,9 @@ impl CarrierProxy {
 
 impl DynamicHandler for CarrierProxy {
     fn handle(&self, request: Request) -> Option<Request> {
+        if matches!(*self.state.read().unwrap(), ProxyState::Idle) {
+            return Some(request);
+        }
         let upstream = match route(request.url()) {
             Route::Static => return Some(request),
             Route::Reject => {

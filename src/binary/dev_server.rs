@@ -258,22 +258,26 @@ pub fn watch_with(options: DevServerOptions) -> Result<crate::binary::ExitStatus
                 carriers.rebuild();
             }
         }
+        // Left stale while idle, so a carrier added later is sent current objects.
         #[cfg(feature = "carriers")]
         if carrier_objects_stale {
-            if let Some(carriers) = &carriers {
-                let fs = file_system_stdlib::NativeFileSystem::new(&root_dir);
-                match build_payload(&site, &fs, carrier_site_url.as_deref().unwrap_or_default()) {
-                    Ok(payload) => {
-                        carriers.set_objects(payload);
-                        carrier_objects_stale = false;
-                    }
-                    Err(e) => {
-                        warn!("couldn't read this site's objects for carriers: {}", e);
-                        carrier_objects_stale = false;
+            match &carriers {
+                Some(carriers) if carriers.is_idle() => {}
+                Some(carriers) => {
+                    let fs = file_system_stdlib::NativeFileSystem::new(&root_dir);
+                    match build_payload(&site, &fs, carrier_site_url.as_deref().unwrap_or_default())
+                    {
+                        Ok(payload) => {
+                            carriers.set_objects(payload);
+                            carrier_objects_stale = false;
+                        }
+                        Err(e) => {
+                            warn!("couldn't read this site's objects for carriers: {}", e);
+                            carrier_objects_stale = false;
+                        }
                     }
                 }
-            } else {
-                carrier_objects_stale = false;
+                None => carrier_objects_stale = false,
             }
         }
         // Batch changes every 200ms

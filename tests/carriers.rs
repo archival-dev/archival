@@ -21,45 +21,24 @@ mod carrier_tests {
     const FIXTURE: &str = "tests/fixtures/carriers-site";
     const READY_TIMEOUT: Duration = Duration::from_secs(60);
 
-    /// Carriers need a node with stable `fetch`/`Blob`/`FormData` and a global
-    /// `File`. Below that, or with no node at all, there is nothing to test.
+    /// Below the Node `archival run` accepts for carriers, or with no node at
+    /// all, there is nothing to test.
     fn node_ok() -> bool {
         let Ok(output) = Command::new("node").arg("--version").output() else {
             println!("skipping: `node` is not on PATH");
             return false;
         };
         let printed = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let major: u64 = printed
+        let version: Vec<u64> = printed
             .trim_start_matches('v')
             .split('.')
-            .next()
-            .and_then(|m| m.parse().ok())
-            .unwrap_or(0);
-        if major < 20 {
-            println!("skipping: node {} is older than 20", printed);
+            .filter_map(|part| part.parse().ok())
+            .collect();
+        if version.as_slice() < [22, 13].as_slice() {
+            println!("skipping: node {} is older than 22.13", printed);
             return false;
         }
         true
-    }
-
-    /// Whether this node can strip TypeScript's types itself, which is what the
-    /// toolchain builds a `.ts` carrier with.
-    fn node_strips_types() -> bool {
-        let Ok(output) = Command::new("node")
-            .args(["-p", "typeof require('node:module').stripTypeScriptTypes"])
-            .output()
-        else {
-            return false;
-        };
-        String::from_utf8_lossy(&output.stdout).trim() == "function"
-    }
-
-    /// Whether this node has `node:sqlite`, which `site.sql` runs on.
-    fn node_has_sqlite() -> bool {
-        Command::new("node")
-            .args(["-e", "require('node:sqlite')"])
-            .output()
-            .is_ok_and(|output| output.status.success())
     }
 
     /// Turns "nothing ever answered" into a diagnosis: the binary under test is
@@ -118,6 +97,12 @@ mod carrier_tests {
 
     impl DevServer {
         fn start(root: PathBuf) -> Self {
+            let server = Self::spawn(root);
+            server.wait_until_ready();
+            server
+        }
+
+        fn spawn(root: PathBuf) -> Self {
             assert_binary_has_carriers();
             let port = free_port();
             let mut child = Command::new(env!("CARGO_BIN_EXE_archival"))
@@ -140,14 +125,20 @@ mod carrier_tests {
                     }
                 });
             }
-            let server = Self {
+            Self {
                 child,
                 port,
                 root,
                 output,
-            };
-            server.wait_until_ready();
-            server
+            }
+        }
+
+        fn wait_until_listening(&self) {
+            let deadline = Instant::now() + READY_TIMEOUT;
+            while Self::client().get(self.url("/")).send().is_err() {
+                assert!(Instant::now() < deadline, "the dev server never listened");
+                thread::sleep(Duration::from_millis(100));
+            }
         }
 
         /// How many times the sidecar has come up. More than one without an
@@ -323,14 +314,12 @@ mod carrier_tests {
         }
         let server = DevServer::start(site_copy());
 
-        if node_strips_types() {
-            let body = DevServer::json(server.get("/carriers/linked?name=tormenta"));
-            assert_eq!(
-                body["greeting"], "hello tormenta!",
-                "its own files are linked, named with an extension or without"
-            );
-            assert_eq!(body["count"], 2, "a json file is imported as its value");
-        }
+        let body = DevServer::json(server.get("/carriers/linked?name=tormenta"));
+        assert_eq!(
+            body["greeting"], "hello tormenta!",
+            "its own files are linked, named with an extension or without"
+        );
+        assert_eq!(body["count"], 2, "a json file is imported as its value");
 
         let response = server.get("/carriers/commonjs");
         assert_eq!(response.status(), 500);
@@ -359,7 +348,7 @@ mod carrier_tests {
 
     #[test]
     fn a_carrier_reads_a_secret_the_built_site_never_sees() {
-        if !node_ok() || !node_strips_types() {
+        if !node_ok() {
             return;
         }
         let server = DevServer::start(site_copy());
@@ -464,8 +453,30 @@ mod carrier_tests {
     }
 
     #[test]
+    fn a_carrier_added_to_a_site_without_carriers_is_served() {
+        if !node_ok() {
+            return;
+        }
+        let root = site_copy();
+        fs::remove_dir_all(root.join("carriers")).unwrap();
+        let server = DevServer::spawn(root);
+        server.wait_until_listening();
+        assert_eq!(server.get("/carriers/late").status(), 404);
+        assert_eq!(server.starts(), 0, "no carriers means no sidecar");
+
+        let carrier = server.root.join("carriers/late");
+        fs::create_dir_all(&carrier).unwrap();
+        fs::write(
+            carrier.join("index.ts"),
+            "export default (): { late: boolean } => ({ late: true });\n",
+        )
+        .unwrap();
+        server.get_until("/carriers/late", "\"late\":true");
+    }
+
+    #[test]
     fn site_sql_keeps_its_rows_in_the_build_directory_across_restarts() {
-        if !node_ok() || !node_has_sqlite() {
+        if !node_ok() {
             return;
         }
         let server = DevServer::start(site_copy());

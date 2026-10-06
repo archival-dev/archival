@@ -21,7 +21,7 @@ name = "archival"
 path = "src/lib.rs"
 
 [features]
-default = ["binary", "compile-scripts", "import-csv", "json-schema", "lsp"]
+default = ["binary", "carriers", "compile-scripts", "import-csv", "json-schema", "lsp"]
 dhat-heap = ["dep:dhat"]
 gen-traces = ["binary", "dep:tracing-chrome"]
 typescript = ["dep:typescript-type-def"]
