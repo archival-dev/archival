@@ -25,10 +25,11 @@ const HEALTH_TIMEOUT: Duration = Duration::from_secs(10);
 const HEALTH_POLL: Duration = Duration::from_millis(20);
 
 /// What the harness is told to serve. `carriers` maps a name to the directory
-/// the carrier is built from.
+/// the carrier is built from, and `database` is the file `site.sql` opens.
 #[derive(Debug, Clone, Serialize)]
 struct State<'a> {
     carriers: &'a BTreeMap<String, PathBuf>,
+    database: &'a Path,
     #[serde(flatten)]
     payload: &'a CarrierPayload,
 }
@@ -130,11 +131,16 @@ impl Sidecar {
     pub fn push_state(
         &self,
         carriers: &BTreeMap<String, PathBuf>,
+        database: &Path,
         payload: &CarrierPayload,
     ) -> Result<()> {
         let response = self
             .control("state")
-            .json(&State { carriers, payload })
+            .json(&State {
+                carriers,
+                database,
+                payload,
+            })
             .send()?;
         if !response.status().is_success() {
             return Err(anyhow!(

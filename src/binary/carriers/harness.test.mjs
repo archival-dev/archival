@@ -5,7 +5,13 @@
 // Run with: node --test src/binary/carriers/harness.test.mjs
 
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -39,6 +45,25 @@ const carrier = (files) => {
 
 const typescript = {
   skip: !toolchain.supported && "this node cannot strip types",
+};
+
+const sqlite = {
+  skip:
+    !process.getBuiltinModule?.("node:sqlite") && "this node has no node:sqlite",
+};
+
+/** A version 2 carrier's `site`, over a database file that does not exist yet. */
+const siteWithDatabase = async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "archival-harness-"));
+  dirs.push(dir);
+  const database = path.join(dir, "dist", "site.sqlite");
+  const [, , , site] = await invokeCarrier(
+    { carrier: (...args) => args, api: 2 },
+    new URLSearchParams(),
+    null,
+    { objects: {}, siteUrl: "", uploads: [], database },
+  );
+  return { site, database };
 };
 
 test("a request is parsed and answered by the toolchain's contract", async () => {
@@ -135,6 +160,7 @@ test("each carrier API version is called its own way", async () => {
   await assert.rejects(
     site.sql.exec("SELECT 1"),
     /site\.sql is not available in archival run/,
+    "without a database file to open",
   );
   assert.equal(await site.activitypub.account(), null);
   assert.deepEqual(await site.activitypub.replies({ path: "artist/a" }), {
@@ -145,6 +171,81 @@ test("each carrier API version is called its own way", async () => {
   await assert.rejects(
     site.activitypub.likes({ name: "no path" }),
     /site\.activitypub needs a post/,
+  );
+});
+
+test("site.sql keeps what it is given in its database file", sqlite, async () => {
+  const { site, database } = await siteWithDatabase();
+  assert.deepEqual(
+    await site.sql.exec(
+      "CREATE TABLE signups (email TEXT, confirmed INTEGER, at TEXT, avatar BLOB);" +
+        " INSERT INTO signups VALUES (?, ?, ?, ?); -- the last statement binds",
+      "a@b.test",
+      true,
+      new Date(Date.UTC(2026, 9, 6)),
+      new Uint8Array([1, 2, 3]),
+    ),
+    [],
+  );
+  assert.ok(existsSync(database));
+  const [row] = await site.sql.exec("SELECT * FROM signups");
+  assert.equal(Object.getPrototypeOf(row), Object.prototype);
+  assert.deepEqual(row, {
+    email: "a@b.test",
+    confirmed: 1,
+    at: "2026-10-06T00:00:00.000Z",
+    avatar: new Uint8Array([1, 2, 3]),
+  });
+
+  await assert.rejects(
+    site.sql.transaction([
+      ["INSERT INTO signups (email) VALUES (?)", "c@d.test"],
+      ["INSERT INTO nowhere VALUES (1)"],
+    ]),
+    /site\.sql failed: no such table: nowhere/,
+  );
+  assert.deepEqual(
+    await site.sql.transaction([
+      ["SELECT count(*) AS count FROM signups"],
+      ["SELECT email FROM signups WHERE confirmed = ?", true],
+    ]),
+    [[{ count: 1 }], [{ email: "a@b.test" }]],
+    "a failed transaction keeps nothing it did",
+  );
+
+  const { DatabaseSync } = process.getBuiltinModule("node:sqlite");
+  const reopened = new DatabaseSync(database, { readOnly: true });
+  assert.equal(
+    reopened.prepare("SELECT email FROM signups").get().email,
+    "a@b.test",
+    "a committed write is on disk",
+  );
+  reopened.close();
+});
+
+test("site.sql refuses what a deployed database refuses", sqlite, async () => {
+  const { site } = await siteWithDatabase();
+  await assert.rejects(
+    site.sql.exec("SELECT ?", undefined),
+    /bind null instead/,
+  );
+  await assert.rejects(
+    site.sql.exec("SELECT ?", { an: "object" }),
+    /site\.sql failed: Parameter 1 of statement 1 must be/,
+  );
+  await assert.rejects(site.sql.exec("  "), /Statement 1 has no SQL/);
+  await assert.rejects(
+    site.sql.exec("SELECT 1", ...new Array(101).fill(1)),
+    /at most 100 parameters/,
+  );
+  await assert.rejects(site.sql.transaction("SELECT 1"), /takes a list/);
+  await assert.rejects(site.sql.transaction([]), /non-empty/);
+  await assert.rejects(
+    site.sql.exec(
+      "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10000)" +
+        " SELECT i, zeroblob(1000) AS padding FROM n",
+    ),
+    /results can be at most/,
   );
 });
 

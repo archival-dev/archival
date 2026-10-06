@@ -54,6 +54,14 @@ mod carrier_tests {
         String::from_utf8_lossy(&output.stdout).trim() == "function"
     }
 
+    /// Whether this node has `node:sqlite`, which `site.sql` runs on.
+    fn node_has_sqlite() -> bool {
+        Command::new("node")
+            .args(["-e", "require('node:sqlite')"])
+            .output()
+            .is_ok_and(|output| output.status.success())
+    }
+
     /// Turns "nothing ever answered" into a diagnosis: the binary under test is
     /// shared, and anything that rebuilds it without this feature makes every
     /// carrier route a plain 404.
@@ -453,6 +461,38 @@ mod carrier_tests {
         fs::write(&entry, "export default () => ({ reloaded: true });\n").unwrap();
         let body = server.get_until("/carriers/echo", "reloaded");
         assert!(body.contains("\"reloaded\":true"), "{}", body);
+    }
+
+    #[test]
+    fn site_sql_keeps_its_rows_in_the_build_directory_across_restarts() {
+        if !node_ok() || !node_has_sqlite() {
+            return;
+        }
+        let server = DevServer::start(site_copy());
+        let client = DevServer::client();
+        let visit = || {
+            DevServer::json(
+                client
+                    .post(server.url("/carriers/tally"))
+                    .json(&serde_json::json!({}))
+                    .send()
+                    .unwrap(),
+            )
+        };
+        assert_eq!(visit()["count"], 1);
+        assert_eq!(visit()["count"], 2);
+        assert!(server.root.join("dist/site.sqlite").is_file());
+
+        let entry = server.root.join("carriers/tally/index.js");
+        let source = fs::read_to_string(&entry).unwrap();
+        fs::write(
+            &entry,
+            source.replace("return { count };", "return { count, restarted: true };"),
+        )
+        .unwrap();
+        let body: serde_json::Value =
+            serde_json::from_str(&server.get_until("/carriers/tally", "restarted")).unwrap();
+        assert_eq!(body["count"], 2, "a new sidecar opens the same database");
     }
 
     #[test]

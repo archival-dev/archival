@@ -175,11 +175,175 @@ const makeEmail = (name) => ({
   },
 });
 
-const makeSql = (name) => {
-  const unavailable = async () => {
-    throw new Error(name + " is not available in archival run");
+// What a deployed site's database refuses a request for, before it runs one.
+const SQL_MAX_STATEMENTS = 100;
+const SQL_MAX_STATEMENT_LENGTH = 100_000;
+const SQL_MAX_PARAMS = 100;
+const SQL_MAX_RESULT_BYTES = 5 * 1024 * 1024;
+
+// What may sit between two statements in one string without being one.
+const BETWEEN_STATEMENTS = /^(?:\s|;|--[^\n]*|\/\*[\s\S]*?(?:\*\/|$))*/;
+
+/** database file -> its connection, which every carrier and request shares. */
+const databases = new Map();
+
+const openDatabase = (name, file) => {
+  let opening = databases.get(file);
+  if (!opening) {
+    opening = import("node:sqlite").then(
+      ({ DatabaseSync }) => {
+        mkdirSync(path.dirname(file), { recursive: true });
+        return new DatabaseSync(file);
+      },
+      () => {
+        throw new Error(
+          name +
+            " needs Node 22.13 or later, which has node:sqlite; this is Node " +
+            process.version,
+        );
+      },
+    );
+    databases.set(file, opening);
+  }
+  return opening;
+};
+
+/**
+ * A bound value as a deployed carrier's database receives it, which is after
+ * a round trip through JSON: a Date arrives as its ISO string, NaN as null.
+ */
+const toParam = (name, value) => {
+  if (value instanceof ArrayBuffer) {
+    return new Uint8Array(value);
+  }
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  }
+  if (value === undefined) {
+    throw new Error(name + " cannot bind undefined - bind null instead");
+  }
+  const sent = JSON.parse(JSON.stringify([value]))[0];
+  if (typeof sent === "boolean") {
+    return sent ? 1 : 0;
+  }
+  if (sent === null || typeof sent === "string" || typeof sent === "number") {
+    return sent;
+  }
+  return undefined;
+};
+
+const valueBytes = (value) =>
+  value instanceof Uint8Array
+    ? value.byteLength
+    : typeof value === "string"
+      ? value.length
+      : 8;
+
+/**
+ * Runs every statement in `sql`, binding `params` to the last and answering
+ * its rows, as a deployed site's database does. node:sqlite prepares only the
+ * first statement in a string, so the rest are found by what it consumed.
+ */
+const runStatements = (db, sql, params) => {
+  let rows = [];
+  let rest = sql.replace(BETWEEN_STATEMENTS, "");
+  while (rest) {
+    const statement = db.prepare(rest);
+    rest = rest
+      .slice(statement.sourceSQL.length)
+      .replace(BETWEEN_STATEMENTS, "");
+    if (rest) {
+      statement.run();
+    } else {
+      rows = statement.all(...params);
+    }
+  }
+  return rows;
+};
+
+/**
+ * Builds the sql facade, which the carrier calls `name`, over the SQLite file
+ * at `file`. Each call is one transaction, as it is deployed; the plan and
+ * hourly allowances a deployed site's database enforces are not.
+ */
+const makeSql = (name, file) => {
+  const run = async (statements) => {
+    if (!file) {
+      throw new Error(name + " is not available in archival run");
+    }
+    const requested = statements.map(([sql, ...params]) => ({
+      sql,
+      params: params.map((param) => toParam(name, param)),
+    }));
+    const refuse = (error) => {
+      throw new Error(name + " failed: " + error);
+    };
+    if (requested.length === 0) {
+      refuse("statements must be a non-empty array");
+    }
+    if (requested.length > SQL_MAX_STATEMENTS) {
+      refuse(`A transaction takes at most ${SQL_MAX_STATEMENTS} statements`);
+    }
+    for (const [i, { sql, params }] of requested.entries()) {
+      if (typeof sql !== "string" || !sql.trim()) {
+        refuse(`Statement ${i + 1} has no SQL`);
+      }
+      if (sql.length > SQL_MAX_STATEMENT_LENGTH) {
+        refuse(
+          `Statement ${i + 1} is longer than ${SQL_MAX_STATEMENT_LENGTH} characters`,
+        );
+      }
+      if (params.length > SQL_MAX_PARAMS) {
+        refuse(`Statement ${i + 1} takes at most ${SQL_MAX_PARAMS} parameters`);
+      }
+      const p = params.indexOf(undefined);
+      if (p !== -1) {
+        refuse(
+          `Parameter ${p + 1} of statement ${i + 1} must be a string, a finite number, a boolean, null or bytes`,
+        );
+      }
+    }
+    const db = await openDatabase(name, file);
+    let resultBytes = 0;
+    db.exec("BEGIN");
+    try {
+      const results = requested.map(({ sql, params }) =>
+        runStatements(db, sql, params).map((row) => {
+          for (const [column, value] of Object.entries(row)) {
+            resultBytes += column.length + valueBytes(value);
+          }
+          if (resultBytes > SQL_MAX_RESULT_BYTES) {
+            throw new Error(
+              `A request's results can be at most ${SQL_MAX_RESULT_BYTES} bytes. Select fewer rows, or fewer columns.`,
+            );
+          }
+          return { ...row };
+        }),
+      );
+      db.exec("COMMIT");
+      return results;
+    } catch (e) {
+      try {
+        db.exec("ROLLBACK");
+      } catch {
+        // The statement that failed already ended the transaction.
+      }
+      refuse((e && e.message) || e);
+    }
   };
-  return { exec: unavailable, transaction: unavailable };
+  const exec = async (sql, ...params) => (await run([[sql, ...params]]))[0];
+  const transaction = async (statements) => {
+    if (
+      !Array.isArray(statements) ||
+      statements.some((statement) => !Array.isArray(statement))
+    ) {
+      throw new Error(
+        name + ".transaction takes a list of [sql, ...params] statements",
+      );
+    }
+    return run(statements);
+  };
+  return { exec, transaction };
 };
 
 /**
@@ -249,7 +413,7 @@ const CARRIER_CALLS = new Map([
           url: current.siteUrl,
           uploads: makeUploads("site.uploads", current),
           email: makeEmail("site.email"),
-          sql: makeSql("site.sql"),
+          sql: makeSql("site.sql", current.database),
           activitypub: makeActivityPub("site.activitypub"),
         }),
       ),
@@ -484,17 +648,17 @@ const server = http.createServer(async (req, res) => {
 });
 
 /**
- * Node warns that its type stripper is experimental the first time a
- * TypeScript carrier is built. Every other warning is the carrier author's to
- * read, so only that one is dropped.
+ * Node warns that its type stripper and its SQLite module are experimental the
+ * first time a TypeScript carrier is built or site.sql is used. Every other
+ * warning is the carrier author's to read, so only those are dropped.
  */
-const quietTypeStripping = () => {
+const quietHarnessWarnings = () => {
   const [print] = process.listeners("warning");
   process.removeAllListeners("warning");
   process.on("warning", (warning) => {
     if (
       warning.name === "ExperimentalWarning" &&
-      /stripTypeScriptTypes/.test(warning.message)
+      /stripTypeScriptTypes|SQLite/.test(warning.message)
     ) {
       return;
     }
@@ -516,7 +680,7 @@ export const start = () => {
   // One carrier's unhandled failure must not take down the others.
   process.on("uncaughtException", (e) => console.error("[carrier]", e));
   process.on("unhandledRejection", (e) => console.error("[carrier]", e));
-  quietTypeStripping();
+  quietHarnessWarnings();
   prepareBuildDir();
 
   // The dev server holds this pipe open and never writes to it, so this fires

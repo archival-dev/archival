@@ -5,7 +5,8 @@
 //! (or `(params, body, objects)` for a carrier whose package.json names no
 //! carrier API version), where `objects` is the site's object tree with
 //! `secret` fields included - the whole point of the feature, and the reason
-//! this is not on by default.
+//! this is not on by default. `site.sql` is a SQLite file in the build
+//! directory, which every carrier shares.
 
 pub(crate) mod discovery;
 pub(crate) mod host;
@@ -30,6 +31,8 @@ use std::{
 };
 use tracing::{debug, warn};
 use walkdir::WalkDir;
+
+const DATABASE_FILE_NAME: &str = "site.sqlite";
 
 /// Tracks what each watched carrier file last contained.
 ///
@@ -124,13 +127,17 @@ pub(crate) struct CarrierSupervisor {
 impl CarrierSupervisor {
     /// `None` when this site has no carriers, or they were turned off. The dev
     /// server then behaves exactly as it does without the feature.
-    pub fn new(site_root: &Path, options: CarrierOptions) -> Option<Self> {
+    pub fn new(site_root: &Path, build_dir: &Path, options: CarrierOptions) -> Option<Self> {
         if options.disabled {
             return None;
         }
         match discovery::discover(site_root) {
             Ok(carriers) if carriers.is_empty() => None,
-            Ok(_) => Some(Self::start(site_root.to_path_buf(), options)),
+            Ok(_) => Some(Self::start(
+                site_root.to_path_buf(),
+                build_dir.join(DATABASE_FILE_NAME),
+                options,
+            )),
             Err(e) => {
                 warn!("couldn't read {}/: {}", CARRIERS_DIR_NAME, e);
                 None
@@ -138,13 +145,14 @@ impl CarrierSupervisor {
         }
     }
 
-    fn start(site_root: PathBuf, options: CarrierOptions) -> Self {
+    fn start(site_root: PathBuf, database: PathBuf, options: CarrierOptions) -> Self {
         let state = Arc::new(RwLock::new(ProxyState::Starting));
         let sidecar = Arc::new(Mutex::new(None));
         let seen = Arc::new(Mutex::new(SeenContents::default()));
         let (to_worker, inbox) = mpsc::channel();
         let worker = Worker {
             site_root,
+            database,
             options,
             state: state.clone(),
             sidecar: sidecar.clone(),
@@ -233,6 +241,7 @@ impl Drop for CarrierSupervisor {
 
 struct Worker {
     site_root: PathBuf,
+    database: PathBuf,
     options: CarrierOptions,
     state: Arc<RwLock<ProxyState>>,
     sidecar: Arc<Mutex<Option<Sidecar>>>,
@@ -328,7 +337,7 @@ impl Worker {
             // objects. Whichever comes second pushes.
             return Ok(());
         };
-        sidecar.push_state(&self.roots, payload)
+        sidecar.push_state(&self.roots, &self.database, payload)
     }
 }
 

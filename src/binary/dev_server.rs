@@ -116,11 +116,12 @@ pub fn watch_with(options: DevServerOptions) -> Result<crate::binary::ExitStatus
     let watcher_queue = change_queue.clone();
     let mut merged_watch_paths = watch_paths.unwrap_or_default();
     merged_watch_paths.append(&mut site.manifest.watched_paths());
+    let path = root_dir.join(&site.manifest.build_dir);
     // Carriers need a running server to be reachable, so with --noserve there
     // is nothing to attach them to.
     #[cfg(feature = "carriers")]
     let carriers = if matches!(mode, DevServerMode::Serve(_)) {
-        CarrierSupervisor::new(&root_dir, carrier_options)
+        CarrierSupervisor::new(&root_dir, &path, carrier_options)
     } else {
         None
     };
@@ -139,7 +140,6 @@ pub fn watch_with(options: DevServerOptions) -> Result<crate::binary::ExitStatus
             }
         }
     })?;
-    let path = root_dir.join(&site.manifest.build_dir);
     #[cfg(feature = "carriers")]
     let mut carrier_site_url = site_url;
     if let DevServerMode::Serve(port) = mode {
