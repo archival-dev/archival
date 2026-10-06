@@ -11,6 +11,8 @@ import path from "node:path";
 import test from "node:test";
 import {
   buildAndLoad,
+  carrierApiVersion,
+  invokeCarrier,
   parseRequestBody,
   readCarrierFiles,
   toResponse,
@@ -80,8 +82,60 @@ test("a typescript carrier is built and loaded", typescript, async () => {
     "lib/greet.ts": `export const greet = (name: string | null): string => "hi " + name;`,
     "data.json": `{"mark":"!"}`,
   });
-  const run = await buildAndLoad("echo", root, out);
+  const { carrier: run, api } = await buildAndLoad("echo", root, out);
   assert.equal(run(new URLSearchParams("name=sam")), "hi sam!");
+  assert.equal(api, 1, "a carrier that names no version is version 1");
+});
+
+test("a carrier names the carrier API version it is written against", () => {
+  assert.equal(carrierApiVersion(undefined), 1);
+  assert.equal(carrierApiVersion("{}"), 1);
+  assert.equal(carrierApiVersion('{"archival":{"carrier":1}}'), 1);
+  assert.equal(carrierApiVersion('{"archival":{"carrier":2}}'), 2);
+  assert.throws(
+    () => carrierApiVersion('{"archival":{"carrier":99}}'),
+    /asks for carrier API 99/,
+  );
+  assert.throws(() => carrierApiVersion("{"), /not valid JSON/);
+});
+
+test("each carrier API version is called its own way", async () => {
+  const current = {
+    objects: Object.freeze({ artist: [{ name: "Tormenta Rey" }] }),
+    siteUrl: "http://localhost:1234",
+    uploads: [],
+    uploadPrefix: "",
+    uploadsUrl: "",
+  };
+  const echo = (...args) => args;
+  const [, , v1Objects, v1Site] = await invokeCarrier(
+    { carrier: echo, api: 1 },
+    new URLSearchParams(),
+    null,
+    current,
+  );
+  assert.equal(v1Objects.SITE_URL, "http://localhost:1234");
+  assert.equal(v1Objects.artist[0].name, "Tormenta Rey");
+  assert.equal(v1Site, undefined);
+
+  const [, , v2Objects, site] = await invokeCarrier(
+    { carrier: echo, api: 2 },
+    new URLSearchParams(),
+    null,
+    current,
+  );
+  assert.equal(v2Objects, current.objects);
+  assert.equal(site.url, "http://localhost:1234");
+  assert.ok(Object.isFrozen(site));
+  assert.throws(() => site.uploads.list(), /site\.uploads is not available/);
+  await assert.rejects(
+    site.email.send({ to: "a@b.test", subject: "x", text: "y" }),
+    /site\.email is not available in archival run/,
+  );
+  await assert.rejects(
+    site.sql.exec("SELECT 1"),
+    /site\.sql is not available in archival run/,
+  );
 });
 
 test("what a deploy would refuse is refused here, by name", async () => {
@@ -104,6 +158,14 @@ test("what a deploy would refuse is refused here, by name", async () => {
   await assert.rejects(
     buildAndLoad("unlocked", unlocked.root, unlocked.out),
     /package-lock\.json/,
+  );
+  const future = carrier({
+    "index.js": `export default () => 1;`,
+    "package.json": `{"archival":{"carrier":99}}`,
+  });
+  await assert.rejects(
+    buildAndLoad("future", future.root, future.out),
+    /asks for carrier API 99/,
   );
   const value = carrier({ "index.js": `export default 42;` });
   await assert.rejects(

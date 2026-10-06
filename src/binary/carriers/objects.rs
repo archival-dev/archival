@@ -22,7 +22,7 @@ const CARRIER_OPTIONS: ToLiquidOptions = ToLiquidOptions {
     include_secrets: true,
 };
 
-/// One of the site's uploaded files, as `objects.UPLOADS.list()` reports it.
+/// One of the site's uploaded files, as a carrier's `uploads.list()` reports it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(crate) struct UploadEntry {
     pub sha: String,

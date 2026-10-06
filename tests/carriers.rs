@@ -293,6 +293,22 @@ mod carrier_tests {
     }
 
     #[test]
+    fn a_carrier_is_called_the_way_its_carrier_api_version_says() {
+        if !node_ok() {
+            return;
+        }
+        let server = DevServer::start(site_copy());
+        let body = DevServer::json(server.get("/carriers/two"));
+        assert_eq!(body["artist"], "Tormenta Rey", "objects reach the carrier");
+        assert_eq!(body["objects"], false, "objects are the site's own");
+        assert_eq!(body["url"], server.url(""), "the site is its own argument");
+        assert_eq!(
+            body["site"],
+            serde_json::json!(["url", "uploads", "email", "sql"])
+        );
+    }
+
+    #[test]
     fn a_carrier_is_built_the_way_a_deploy_builds_it() {
         if !node_ok() {
             return;

@@ -90,22 +90,23 @@ const uploadKey = (prefix, sha, filename) => {
 };
 
 /**
- * Builds objects.UPLOADS. Called per request so the filename index is memoized
- * for one request without carrying stale uploads into the next.
+ * Builds the uploads facade, which the carrier calls `name`, over `current`,
+ * the pushed state. Called per request so the filename index is memoized for
+ * one request without carrying stale uploads into the next.
  */
-const makeUploads = () => {
-  const prefix = state.uploadPrefix;
+const makeUploads = (name, current) => {
+  const prefix = current.uploadPrefix;
   if (!prefix) {
     const unavailable = () => {
       throw new Error(
-        "objects.UPLOADS is not available for this deploy (no upload prefix)",
+        name + " is not available for this deploy (no upload prefix)",
       );
     };
     return { list: unavailable, get: unavailable };
   }
   // Locally there is no bucket to enumerate, so the dev server derives this
   // from the files the site's objects point at.
-  const list = async () => state.uploads;
+  const list = async () => current.uploads;
   const get = async (file, sha) => {
     let filename = file;
     let fileSha = sha;
@@ -115,7 +116,7 @@ const makeUploads = () => {
       fileSha = sha || file.sha;
     }
     if (typeof filename !== "string" || !filename) {
-      throw new Error("UPLOADS.get needs a filename or a file object");
+      throw new Error(name + ".get needs a filename or a file object");
     }
     if (!fileSha) {
       const matches = (await list()).filter((e) => e.filename === filename);
@@ -133,7 +134,7 @@ const makeUploads = () => {
       fileSha = matches[0].sha;
     }
     const key = uploadKey(prefix, fileSha, filename);
-    const url = state.uploadsUrl.replace(/\/$/, "") + "/" + key;
+    const url = current.uploadsUrl.replace(/\/$/, "") + "/" + key;
     const response = await fetch(url);
     if (response.status === 404) {
       return null;
@@ -167,6 +168,89 @@ const makeUploads = () => {
   };
   return { list, get };
 };
+
+const makeEmail = (name) => ({
+  send: async () => {
+    throw new Error(name + " is not available in archival run");
+  },
+});
+
+const makeSql = (name) => {
+  const unavailable = async () => {
+    throw new Error(name + " is not available in archival run");
+  };
+  return { exec: unavailable, transaction: unavailable };
+};
+
+/**
+ * How a carrier written against each carrier API version is called, given the
+ * pushed state. A carrier names its version in its package.json, as
+ * `"archival": { "carrier": 2 }`.
+ */
+const CARRIER_CALLS = new Map([
+  [
+    1,
+    // UPLOADS has methods, so unlike the rest of the vars it cannot be part of
+    // the pushed payload. It wins over a site object of the same name, which is
+    // how every injected var resolves that collision.
+    (carrier, params, body, current) =>
+      carrier(
+        params,
+        body,
+        Object.freeze({
+          ...current.objects,
+          SITE_URL: current.siteUrl,
+          UPLOADS: makeUploads("objects.UPLOADS", current),
+        }),
+      ),
+  ],
+  [
+    2,
+    (carrier, params, body, current) =>
+      carrier(
+        params,
+        body,
+        current.objects,
+        Object.freeze({
+          url: current.siteUrl,
+          uploads: makeUploads("site.uploads", current),
+          email: makeEmail("site.email"),
+          sql: makeSql("site.sql"),
+        }),
+      ),
+  ],
+]);
+
+/**
+ * The carrier API version a carrier's package.json text asks for. One that
+ * names none is version 1 and always will be, so a carrier that never names
+ * one keeps the calling convention it was written for.
+ */
+export const carrierApiVersion = (packageJson) => {
+  if (packageJson === undefined) {
+    return 1;
+  }
+  let manifest;
+  try {
+    manifest = JSON.parse(packageJson);
+  } catch (e) {
+    throw new Error(`package.json is not valid JSON: ${e.message}`);
+  }
+  const version = manifest?.archival?.carrier;
+  if (version === undefined) {
+    return 1;
+  }
+  if (!CARRIER_CALLS.has(version)) {
+    throw new Error(
+      `package.json asks for carrier API ${JSON.stringify(version)}; the versions that exist are ${[...CARRIER_CALLS.keys()].join(", ")}`,
+    );
+  }
+  return version;
+};
+
+/** Calls a carrier `buildAndLoad` answered with a request, against `current`. */
+export const invokeCarrier = ({ carrier, api }, params, body, current) =>
+  CARRIER_CALLS.get(api)(carrier, params, body, current);
 
 const readBody = (req) =>
   new Promise((resolve, reject) => {
@@ -232,11 +316,13 @@ const fetchPackage = async (url) => {
 
 /**
  * Builds the carrier in `root` and writes its modules under `out`, answering
- * the function it default-exports.
+ * the function it default-exports and the carrier API version it names.
  */
 export const buildAndLoad = async (name, root, out) => {
+  const files = readCarrierFiles(root);
+  const api = carrierApiVersion(files.get("package.json"));
   const compiled = await buildCarrier({
-    files: readCarrierFiles(root),
+    files,
     strip,
     parse,
     fetch: fetchPackage,
@@ -257,7 +343,7 @@ export const buildAndLoad = async (name, root, out) => {
   if (!carrier) {
     throw new Error("it does not default-export a function");
   }
-  return carrier;
+  return { carrier, api };
 };
 
 const loadCarrier = (name) => {
@@ -281,9 +367,9 @@ const runCarrier = async (name, req, body) => {
     return new Response("No carrier named " + name, { status: 404 });
   }
   const params = new URL(req.url, "http://carrier.local").searchParams;
-  let carrier;
+  let loaded;
   try {
-    carrier = await loadCarrier(name);
+    loaded = await loadCarrier(name);
   } catch (e) {
     return new Response(
       "Carrier " + name + " could not be built: " + ((e && e.message) || e),
@@ -296,15 +382,7 @@ const runCarrier = async (name, req, body) => {
       [["content-type", req.headers["content-type"] || ""]],
       body,
     );
-    // UPLOADS has methods, so unlike the rest of the vars it cannot be part of
-    // the pushed payload. It wins over a site object of the same name, which is
-    // how every injected var resolves that collision.
-    const objects = Object.freeze({
-      ...state.objects,
-      SITE_URL: state.siteUrl,
-      UPLOADS: makeUploads(),
-    });
-    return toResponse(await carrier(params, parsed, objects));
+    return toResponse(await invokeCarrier(loaded, params, parsed, state));
   } catch (e) {
     return new Response("Carrier threw an error: " + e, { status: 500 });
   }

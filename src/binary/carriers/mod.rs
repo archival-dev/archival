@@ -1,9 +1,11 @@
 //! Server side functions ("carriers") run alongside the dev server.
 //!
 //! A carrier is a directory under `carriers/` in the site root, served at
-//! `/carriers/<name>`. It default-exports `(params, body, objects)`, where
-//! `objects` is the site's object tree with `secret` fields included - the
-//! whole point of the feature, and the reason this is not on by default.
+//! `/carriers/<name>`. It default-exports `(params, body, objects, site)`
+//! (or `(params, body, objects)` for a carrier whose package.json names no
+//! carrier API version), where `objects` is the site's object tree with
+//! `secret` fields included - the whole point of the feature, and the reason
+//! this is not on by default.
 
 pub(crate) mod discovery;
 pub(crate) mod host;
