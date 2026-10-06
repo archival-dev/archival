@@ -122,8 +122,8 @@ jobs:
           version: 33.1
       - uses: dtolnay/rust-toolchain@master
         with:
-          # time-macros requires 1.88; lsp-server requires 1.85.
-          toolchain: "1.88.0"
+          # kstring (via liquid-core) requires 1.96.
+          toolchain: "1.96.0"
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.9
       - run: cargo fetch
