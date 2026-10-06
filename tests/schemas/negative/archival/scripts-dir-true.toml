@@ -1,0 +1,2 @@
+# Only `false` is meaningful: `true` names no directory.
+scripts_dir = true

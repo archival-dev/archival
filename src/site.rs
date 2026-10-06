@@ -12,6 +12,7 @@ use crate::{
         TemplateType,
     },
     read_toml::read_toml,
+    scripts::{self, ScriptCollision, ScriptErrors, ScriptFailure, ScriptKind},
     tags::layout,
     util::path_to_slash,
     ArchivalError, BuildOptions, FieldConfig, FileSystemAPI, ObjectMap,
@@ -102,6 +103,9 @@ pub struct WritePlan {
     /// what actually changed.
     unchanged: Vec<(PathBuf, u64)>,
     deletes: Vec<PathBuf>,
+    /// Scripts that did not compile. Applying the plan does not report them, so that
+    /// everything else still lands; whoever applies it decides what they mean.
+    failures: Vec<ScriptFailure>,
 }
 
 /// What one page's last render depended on. A render reads nothing but its own
@@ -163,6 +167,10 @@ fn hash_source(source: &str) -> u64 {
 }
 
 impl WritePlan {
+    pub(crate) fn take_failures(&mut self) -> Vec<ScriptFailure> {
+        std::mem::take(&mut self.failures)
+    }
+
     /// Files this plan accounts for, whether or not it writes them.
     fn visited(&self) -> HashSet<&PathBuf> {
         self.writes
@@ -272,6 +280,11 @@ pub struct Site {
     obj_cache: RwLock<HashMap<PathBuf, Object>>,
     #[serde(skip)]
     static_file_cache: RwLock<HashMap<PathBuf, u64>>,
+    /// Compiled script destination -> (source hash, output hash), so an unchanged
+    /// source is not recompiled.
+    #[cfg(feature = "compile-scripts")]
+    #[serde(skip)]
+    script_cache: RwLock<HashMap<PathBuf, (u64, u64)>>,
     #[serde(skip)]
     build_cache: RwLock<HashMap<PathBuf, u64>>,
     #[serde(skip)]
@@ -372,6 +385,8 @@ impl Site {
             object_definitions: objects,
             obj_cache: RwLock::new(HashMap::new()),
             static_file_cache: RwLock::new(HashMap::new()),
+            #[cfg(feature = "compile-scripts")]
+            script_cache: RwLock::new(HashMap::new()),
             build_cache: RwLock::new(HashMap::new()),
             cache_generation: AtomicU64::new(0),
             parser_cache: RwLock::new(None),
@@ -777,14 +792,18 @@ impl Site {
         }
     }
 
+    /// Script failures are returned as [ScriptErrors] once everything else is synced.
     #[instrument(skip(fs))]
     pub fn sync_static_files<T: FileSystemAPI>(&self, fs: &mut T) -> Result<()> {
-        let plan = self.plan_static_sync(&*fs)?;
-        plan.apply(fs, &self.static_file_cache)
+        let mut plan = self.plan_static_sync(&*fs)?;
+        let failures = plan.take_failures();
+        plan.apply(fs, &self.static_file_cache)?;
+        ScriptErrors::check(failures)
     }
 
     /// Resolves the static copy to the writes and deletes it implies, reading only
-    /// `static_dir`.
+    /// `static_dir` and `scripts_dir`. Compiled scripts share `static_file_cache`, so
+    /// they take a static file's precedence over pages.
     ///
     /// The cache is keyed by destination, like `build_cache`: a key relative to
     /// `static_dir` names a build output only once joined onto `build_dir`, and using
@@ -796,6 +815,7 @@ impl Site {
             ..
         } = &self.manifest;
         let mut plan = WritePlan::default();
+        let mut static_sources = HashMap::new();
         if !fs.exists(build_dir)? {
             plan.dirs.push(build_dir.to_owned());
         }
@@ -817,14 +837,124 @@ impl Site {
                         .parent()
                         .filter(|parent| *parent != build_dir)
                         .map(|parent| parent.to_path_buf());
+                    static_sources.insert(dest.clone(), from);
                     plan.record(&self.static_file_cache, dir, dest, content, hash);
                 }
             }
         } else {
             debug!("static dir {} does not exist.", static_dir.display());
         }
+        self.plan_scripts(fs, &mut plan, &static_sources)?;
         plan.delete_unvisited(&self.static_file_cache);
         Ok(plan)
+    }
+
+    fn plan_scripts<T: FileSystemAPI>(
+        &self,
+        fs: &T,
+        plan: &mut WritePlan,
+        static_sources: &HashMap<PathBuf, PathBuf>,
+    ) -> Result<()> {
+        let Some(scripts_dir) = &self.manifest.scripts_dir else {
+            return Ok(());
+        };
+        if !fs.exists(scripts_dir)? {
+            return Ok(());
+        }
+        let build_dir = &self.manifest.build_dir;
+        let out_dir = self.manifest.scripts_build_path()?;
+        for file in fs.walk_dir(scripts_dir, false)? {
+            let Some((rel_out, kind)) = scripts::output_path(&file) else {
+                continue;
+            };
+            let from = scripts_dir.join(&file);
+            let dest = out_dir.join(rel_out);
+            if let Some(static_file) = static_sources.get(&dest) {
+                return Err(ScriptCollision {
+                    static_file: static_file.to_string_lossy().to_string(),
+                    script: from.to_string_lossy().to_string(),
+                    dest: dest.to_string_lossy().to_string(),
+                }
+                .into());
+            }
+            let source = match fs.read(&from) {
+                Ok(Some(source)) => source,
+                Ok(None) => continue,
+                Err(e) if is_not_found(&e) => continue,
+                Err(e) => return Err(e),
+            };
+            let dir = dest
+                .parent()
+                .filter(|parent| *parent != build_dir)
+                .map(|parent| parent.to_path_buf());
+            match kind {
+                ScriptKind::JavaScript => {
+                    let hash = hash_file(&source);
+                    plan.record(&self.static_file_cache, dir, dest, source, hash);
+                }
+                ScriptKind::TypeScript => self.plan_typescript(plan, from, dir, dest, source),
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "compile-scripts"))]
+    fn plan_typescript(
+        &self,
+        _plan: &mut WritePlan,
+        from: PathBuf,
+        _dir: Option<PathBuf>,
+        _dest: PathBuf,
+        _source: Vec<u8>,
+    ) {
+        warn!(
+            "skipping {}: this build of archival cannot compile TypeScript (compile-scripts feature)",
+            from.display()
+        );
+    }
+
+    #[cfg(feature = "compile-scripts")]
+    fn plan_typescript(
+        &self,
+        plan: &mut WritePlan,
+        from: PathBuf,
+        dir: Option<PathBuf>,
+        dest: PathBuf,
+        source: Vec<u8>,
+    ) {
+        let source_hash = hash_file(&source);
+        let on_disk = self.static_file_cache.read().unwrap().get(&dest).copied();
+        let cached = self.script_cache.read().unwrap().get(&dest).copied();
+        if let (Some((cached_source, cached_output)), Some(on_disk)) = (cached, on_disk) {
+            if cached_source == source_hash && cached_output == on_disk {
+                plan.record_reused(dest, on_disk);
+                return;
+            }
+        }
+        let compiled = String::from_utf8(source)
+            .map_err(|_| ScriptFailure {
+                message: format!("{}: not valid UTF-8", from.display()),
+                path: from.clone(),
+            })
+            .and_then(|source| scripts::compile(&source, &from));
+        match compiled {
+            Ok(code) => {
+                let code = code.into_bytes();
+                let hash = hash_file(&code);
+                self.script_cache
+                    .write()
+                    .unwrap()
+                    .insert(dest.clone(), (source_hash, hash));
+                plan.record(&self.static_file_cache, dir, dest, code, hash);
+            }
+            Err(failure) => {
+                // Keep serving the last output that compiled.
+                if let Some(on_disk) = on_disk {
+                    plan.record_reused(dest, on_disk);
+                }
+                plan.failures.push(failure);
+            }
+        }
     }
 
     /// A static file takes precedence over a page built to the same path, so static
@@ -1824,5 +1954,260 @@ mod incremental_render {
             .map(|p| built(&archival, p))
             .collect();
         assert_eq!(before, after);
+    }
+}
+
+#[cfg(test)]
+mod script_tests {
+    use super::*;
+    use crate::file_system_memory::MemoryFileSystem;
+    #[cfg(feature = "compile-scripts")]
+    use crate::{Archival, ScriptErrors};
+    use pretty_assertions::assert_eq;
+
+    fn site_with(manifest: &str, files: &[(&str, &str)]) -> MemoryFileSystem {
+        let mut fs = MemoryFileSystem::default();
+        fs.write_str("archival.toml", format!("upload_prefix = \"\"\n{manifest}"))
+            .unwrap();
+        fs.write_str(
+            "archival_objects.toml",
+            "[site]\nname = \"string\"\n".to_string(),
+        )
+        .unwrap();
+        fs.write_str("objects/site.toml", "name = \"Site\"\n".to_string())
+            .unwrap();
+        fs.write_str("pages/index.liquid", "index\n".to_string())
+            .unwrap();
+        for (path, contents) in files {
+            fs.write_str(path, contents.to_string()).unwrap();
+        }
+        fs
+    }
+
+    fn read(fs: &MemoryFileSystem, path: &str) -> Option<String> {
+        fs.read_to_string(Path::new(path)).unwrap()
+    }
+
+    #[cfg(feature = "compile-scripts")]
+    #[test]
+    fn scripts_build_into_the_js_dir() -> Result<()> {
+        let mut fs = site_with(
+            "",
+            &[
+                (
+                    "scripts/main.ts",
+                    "import { x } from \"./lib/x.ts\";\nconst n: number = x;\n",
+                ),
+                ("scripts/lib/x.ts", "export const x: number = 1;\n"),
+                (
+                    "scripts/module.mts",
+                    "export type T = string;\nexport const m = 1;\n",
+                ),
+                ("scripts/plain.js", "export const plain = 1 ;\n"),
+                ("scripts/types.d.ts", "declare const DEV: boolean;\n"),
+                ("scripts/notes.md", "# notes\n"),
+            ],
+        );
+        let site = Site::load(&fs, None)?;
+        site.sync_static_files(&mut fs)?;
+
+        assert_eq!(
+            read(&fs, "dist/js/main.js").as_deref(),
+            Some("import { x } from \"./lib/x.js\";\nconst n         = x;\n")
+        );
+        assert_eq!(
+            read(&fs, "dist/js/lib/x.js").as_deref(),
+            Some("export const x         = 1;\n")
+        );
+        assert!(read(&fs, "dist/js/module.mjs")
+            .unwrap()
+            .contains("export const m = 1;"));
+        assert_eq!(
+            read(&fs, "dist/js/plain.js").as_deref(),
+            Some("export const plain = 1 ;\n")
+        );
+        assert_eq!(read(&fs, "dist/js/types.d.js"), None);
+        assert_eq!(read(&fs, "dist/js/types.js"), None);
+        assert_eq!(read(&fs, "dist/js/notes.md"), None);
+        Ok(())
+    }
+
+    #[cfg(feature = "compile-scripts")]
+    #[test]
+    fn scripts_dir_and_scripts_build_dir_are_configurable() -> Result<()> {
+        let script = [("src/editors/unfurl.ts", "export const a: string = \"\";\n")];
+        let mut fs = site_with("scripts_dir = \"src\"\nscripts_build_dir = \"\"\n", &script);
+        let site = Site::load(&fs, None)?;
+        site.sync_static_files(&mut fs)?;
+        assert!(read(&fs, "dist/editors/unfurl.js").is_some());
+
+        let mut fs = site_with("scripts_dir = false\n", &script);
+        let site = Site::load(&fs, None)?;
+        site.sync_static_files(&mut fs)?;
+        assert_eq!(read(&fs, "dist/js/editors/unfurl.js"), None);
+        assert_eq!(read(&fs, "dist/editors/unfurl.js"), None);
+        Ok(())
+    }
+
+    #[cfg(feature = "compile-scripts")]
+    #[test]
+    fn a_missing_scripts_dir_builds_nothing() -> Result<()> {
+        let mut fs = site_with("", &[]);
+        let site = Site::load(&fs, None)?;
+        site.sync_static_files(&mut fs)?;
+        assert!(!fs.exists(Path::new("dist/js"))?);
+        Ok(())
+    }
+
+    #[cfg(feature = "compile-scripts")]
+    #[test]
+    fn a_broken_script_keeps_its_last_output_and_fails_the_sync() -> Result<()> {
+        let mut fs = site_with(
+            "",
+            &[
+                ("scripts/main.ts", "export const a: number = 1;\n"),
+                ("scripts/other.ts", "export const b: number = 1;\n"),
+                ("public/style.css", "body {}\n"),
+            ],
+        );
+        let site = Site::load(&fs, None)?;
+        site.sync_static_files(&mut fs)?;
+        let good = read(&fs, "dist/js/main.js");
+
+        fs.write_str("scripts/main.ts", "enum Broken { A }\n".to_string())?;
+        fs.write_str(
+            "scripts/other.ts",
+            "export const b: number = 2;\n".to_string(),
+        )?;
+        fs.write_str("public/style.css", "body { color: red }\n".to_string())?;
+        let err = site.sync_static_files(&mut fs).unwrap_err();
+        let errors = err.downcast_ref::<ScriptErrors>().expect("a ScriptErrors");
+        assert_eq!(errors.0.len(), 1);
+        assert!(
+            errors.0[0].message.starts_with("scripts/main.ts:1:1: "),
+            "{}",
+            errors.0[0].message
+        );
+        assert_eq!(read(&fs, "dist/js/main.js"), good);
+        assert!(read(&fs, "dist/js/other.js").unwrap().contains("= 2;"));
+        assert_eq!(
+            read(&fs, "dist/style.css").as_deref(),
+            Some("body { color: red }\n")
+        );
+
+        fs.write_str(
+            "scripts/main.ts",
+            "export const a: number = 3;\n".to_string(),
+        )?;
+        site.sync_static_files(&mut fs)?;
+        assert!(read(&fs, "dist/js/main.js").unwrap().contains("= 3;"));
+        Ok(())
+    }
+
+    #[cfg(feature = "compile-scripts")]
+    #[test]
+    fn removing_a_script_removes_its_output() -> Result<()> {
+        let mut fs = site_with("", &[("scripts/main.ts", "export const a = 1;\n")]);
+        let site = Site::load(&fs, None)?;
+        site.sync_static_files(&mut fs)?;
+        assert!(read(&fs, "dist/js/main.js").is_some());
+
+        fs.delete(Path::new("scripts/main.ts"))?;
+        site.sync_static_files(&mut fs)?;
+        assert_eq!(read(&fs, "dist/js/main.js"), None);
+        Ok(())
+    }
+
+    #[cfg(feature = "compile-scripts")]
+    #[test]
+    fn an_unchanged_script_is_not_rewritten() -> Result<()> {
+        let mut fs = site_with("", &[("scripts/main.ts", "export const a: number = 1;\n")]);
+        let site = Site::load(&fs, None)?;
+        site.sync_static_files(&mut fs)?;
+
+        let plan = site.plan_static_sync(&fs)?;
+        assert!(plan.writes.is_empty(), "{:?}", plan.writes);
+        assert!(plan.deletes.is_empty(), "{:?}", plan.deletes);
+        Ok(())
+    }
+
+    #[cfg(feature = "compile-scripts")]
+    #[test]
+    fn a_static_file_and_a_script_may_not_build_to_the_same_path() -> Result<()> {
+        let fs = site_with(
+            "",
+            &[
+                ("scripts/main.ts", "export const a = 1;\n"),
+                ("public/js/main.js", "static\n"),
+            ],
+        );
+        let site = Site::load(&fs, None)?;
+        let err = site.plan_static_sync(&fs).unwrap_err();
+        assert!(err.downcast_ref::<ScriptCollision>().is_some(), "{err}");
+        Ok(())
+    }
+
+    #[cfg(feature = "compile-scripts")]
+    #[test]
+    fn a_script_shadows_a_page_built_to_the_same_path() -> Result<()> {
+        let mut fs = site_with(
+            "",
+            &[
+                ("scripts/main.ts", "export const a = 1;\n"),
+                ("pages/js/main.js.liquid", "page\n"),
+            ],
+        );
+        let site = Site::load(&fs, None)?;
+        site.sync_static_files(&mut fs)?;
+        site.build(&mut fs, BuildOptions::default())?;
+        assert_eq!(
+            read(&fs, "dist/js/main.js").as_deref(),
+            Some("export const a = 1;\n")
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "compile-scripts")]
+    #[test]
+    fn a_broken_script_does_not_stop_pages_building() -> Result<()> {
+        let fs = site_with("", &[("scripts/main.ts", "enum Broken { A }\n")]);
+        let archival = Archival::new(fs)?;
+        let err = archival.build(BuildOptions::default()).unwrap_err();
+        assert!(err.downcast_ref::<ScriptErrors>().is_some(), "{err}");
+        assert_eq!(archival.fs_read_file("dist/index.html")?.trim(), "index");
+
+        archival.build(BuildOptions {
+            skip_failures: true,
+            ..Default::default()
+        })?;
+        archival.fs_write_file(
+            "scripts/main.ts",
+            "export const a: number = 1;\n".to_string(),
+        )?;
+        archival.build(BuildOptions::default())?;
+        assert!(archival
+            .fs_read_file("dist/js/main.js")?
+            .contains("export const a"));
+        Ok(())
+    }
+
+    #[cfg(not(feature = "compile-scripts"))]
+    #[test]
+    fn without_a_compiler_typescript_is_skipped_and_javascript_copied() -> Result<()> {
+        let mut fs = site_with(
+            "",
+            &[
+                ("scripts/main.ts", "export const a: number = 1;\n"),
+                ("scripts/plain.js", "export const b = 1;\n"),
+            ],
+        );
+        let site = Site::load(&fs, None)?;
+        site.sync_static_files(&mut fs)?;
+        assert_eq!(read(&fs, "dist/js/main.js"), None);
+        assert_eq!(
+            read(&fs, "dist/js/plain.js").as_deref(),
+            Some("export const b = 1;\n")
+        );
+        Ok(())
     }
 }

@@ -12,6 +12,8 @@ schemas_dir = "schemas"
 build_dir = "dist"
 static_dir = "public"
 layout_dir = "layout"
+scripts_dir = "scripts"
+scripts_build_dir = "js"
 
 [metadata]
 source_template_repo = "archival-website"

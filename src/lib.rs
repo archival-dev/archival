@@ -25,6 +25,7 @@ mod reserved_fields;
 #[cfg(test)]
 mod schema_files;
 pub mod schemas;
+mod scripts;
 mod site;
 mod tags;
 #[cfg(test)]
@@ -52,7 +53,7 @@ use std::hash::Hasher;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Mutex;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 #[cfg(feature = "binary")]
 pub mod binary;
 mod constants;
@@ -91,6 +92,7 @@ pub use object::{ObjectMap, RenderedObject, RenderedObjectMap, ValuePath};
 pub use object_definition::{FieldDefinition, FieldsMap, ObjectDefinition, ObjectDefinitions};
 #[cfg(feature = "proto")]
 pub use proto::archival_proto;
+pub use scripts::{ScriptCollision, ScriptErrors, ScriptFailure};
 pub use typescript_defs::generate_typescript_defs;
 
 #[cfg(feature = "uniffi")]
@@ -231,13 +233,14 @@ impl<F: FileSystemAPI + Clone + Debug> Archival<F> {
             return Ok(self.last_build_id.load(AtomicOrdering::Relaxed));
         }
         debug!("build {} {:#?}", self.site, options);
+        let skip_failures = options.skip_failures;
 
         // Both under one acquisition: every mutator invalidates inside its own `with_fs`,
         // so a generation read there cannot drift from the bytes the snapshot holds.
         let (snapshot, generation) = self
             .fs_mutex
             .with_fs(|fs| Ok((fs.snapshot(), self.site.objects_generation())))?;
-        match snapshot {
+        let script_failures = match snapshot {
             Some(snapshot) => {
                 let statics = if options.skip_static {
                     None
@@ -246,22 +249,39 @@ impl<F: FileSystemAPI + Clone + Debug> Archival<F> {
                 };
                 let pages = self.site.plan_build(&snapshot, options, generation)?;
                 self.fs_mutex.with_fs(|fs| {
-                    if let Some(statics) = statics {
+                    let mut failures = vec![];
+                    if let Some(mut statics) = statics {
+                        failures = statics.take_failures();
                         statics.apply(fs, self.site.static_file_cache())?;
                     }
-                    pages.apply_beneath(fs, self.site.build_cache(), self.site.static_file_cache())
-                })?;
+                    pages.apply_beneath(
+                        fs,
+                        self.site.build_cache(),
+                        self.site.static_file_cache(),
+                    )?;
+                    Ok(failures)
+                })?
             }
             None => self.fs_mutex.with_fs(|fs| {
+                let mut failures = vec![];
                 if !options.skip_static {
-                    let statics = self.site.plan_static_sync(&*fs)?;
+                    let mut statics = self.site.plan_static_sync(&*fs)?;
+                    failures = statics.take_failures();
                     statics.apply(fs, self.site.static_file_cache())?;
                 }
                 let pages = self
                     .site
                     .plan_build(&*fs, options, self.site.objects_generation())?;
-                pages.apply_beneath(fs, self.site.build_cache(), self.site.static_file_cache())
+                pages.apply_beneath(fs, self.site.build_cache(), self.site.static_file_cache())?;
+                Ok(failures)
             })?,
+        };
+        if skip_failures {
+            for failure in &script_failures {
+                warn!("{}", failure.message);
+            }
+        } else {
+            ScriptErrors::check(script_failures)?;
         }
 
         let final_build_id = self.site.build_id();
@@ -352,8 +372,13 @@ impl<F: FileSystemAPI + Clone + Debug> Archival<F> {
             layout_dir,
             objects_dir,
             static_dir,
+            scripts_dir,
             ..
         } = &self.site.manifest;
+        let scripts = match scripts_dir {
+            Some(dir) if fs.exists(dir)? => fs.walk_dir(dir, false)?.map(|p| dir.join(p)).collect(),
+            _ => vec![],
+        };
         let root_files = [
             Manifest::path_in(Path::new(""), fs)?,
             object_definition_file.to_owned(),
@@ -366,7 +391,8 @@ impl<F: FileSystemAPI + Clone + Debug> Archival<F> {
             .chain(
                 fs.walk_dir(objects_dir, false)?
                     .map(|p| objects_dir.join(p)),
-            ))
+            )
+            .chain(scripts))
     }
     fn fs_id_for_fs(&self, fs: &F) -> Result<u64> {
         let mut hasher = SeaHasher::new();
@@ -1354,6 +1380,7 @@ mod lib {
         archival.modify_manifest(|m| {
             m.site_url = Some("test.com".to_string());
             m.prebuild = vec!["test".to_string()];
+            m.scripts_dir = None;
         })?;
         let output = archival.site.manifest.to_toml()?;
         println!("{}", output);
@@ -1361,8 +1388,10 @@ mod lib {
         // Doesn't fill defaults
         assert!(!output.contains("objects_dir"));
         assert!(!output.contains("objects"));
+        assert!(!output.contains("scripts_build_dir"));
         // Does show non-defaults
         assert!(output.contains("prebuild = [\"test\"]"));
+        assert!(output.contains("scripts_dir = false"));
         Ok(())
     }
 

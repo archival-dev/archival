@@ -68,6 +68,16 @@
       "type": "string",
       "default": "layout"
     },
+    "scripts_dir": {
+      "description": "the folder that archival builds browser scripts from into scripts_build_dir: TypeScript files have their types stripped and JavaScript files are copied as they are. Set to false to turn this off",
+      "anyOf": [{ "type": "string" }, { "const": false }],
+      "default": "scripts"
+    },
+    "scripts_build_dir": {
+      "description": "the folder inside build_dir that archival writes built scripts to; an empty string writes them to the root of build_dir",
+      "type": "string",
+      "default": "js"
+    },
     "metadata": {
       "description": "arbitrary string metadata about this site, used by the archival editor and other machine readers of this manifest",
       "type": "object",

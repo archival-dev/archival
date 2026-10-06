@@ -105,6 +105,8 @@ fn all_manifest_fields() -> Vec<ManifestField> {
         ManifestField::StaticDir,
         ManifestField::SchemasDir,
         ManifestField::LayoutDir,
+        ManifestField::ScriptsDir,
+        ManifestField::ScriptsBuildDir,
         ManifestField::UploadsUrl,
         ManifestField::EditorTypes,
         ManifestField::Metadata,
@@ -123,6 +125,8 @@ fn all_manifest_fields() -> Vec<ManifestField> {
             | ManifestField::StaticDir
             | ManifestField::SchemasDir
             | ManifestField::LayoutDir
+            | ManifestField::ScriptsDir
+            | ManifestField::ScriptsBuildDir
             | ManifestField::UploadsUrl
             | ManifestField::EditorTypes
             | ManifestField::Metadata => {}

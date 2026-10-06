@@ -176,8 +176,12 @@ Dates as `| date: "%Y-%m-%d"`, images as `.url`, optional properties inside
 
 ## 10. `archival.toml` for a real site
 
-Set `site_name`, and `prebuild` if the design needs a build step (its outputs go
-to `public/`, never `dist/`). Do **not** set `site_url`, `upload_prefix`,
+Set `site_name`. Browser scripts go in `scripts/`, which archival builds into
+`/js/` with no build step: `scripts/main.ts` is served as `/js/main.js` with its
+types stripped, and `.js` files are copied as they are. Only erasable TypeScript
+compiles (no `enum`, `namespace` or parameter properties), nothing is bundled, and
+a relative import may name either `./util.ts` or `./util.js`. Set `prebuild` only
+for any other build step (its outputs go to `public/`, never `dist/`). Do **not** set `site_url`, `upload_prefix`,
 `uploads_url` or `metadata`: the platform writes them when the site is claimed,
 and a preview pairing sets the upload keys for the meantime. Gitignore `dist/`.
 

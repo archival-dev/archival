@@ -21,7 +21,7 @@ name = "archival"
 path = "src/lib.rs"
 
 [features]
-default = ["binary", "import-csv", "json-schema", "lsp"]
+default = ["binary", "compile-scripts", "import-csv", "json-schema", "lsp"]
 dhat-heap = ["dep:dhat"]
 gen-traces = ["binary", "dep:tracing-chrome"]
 typescript = ["dep:typescript-type-def"]
@@ -46,6 +46,13 @@ binary = [
 ]
 import-csv = ["dep:csv"]
 json-schema = []
+compile-scripts = [
+    "dep:swc_ts_fast_strip",
+    "dep:swc_common",
+    "dep:swc_ecma_ast",
+    "dep:swc_ecma_parser",
+    "dep:swc_ecma_visit",
+]
 carriers = ["binary"]
 lsp = ["binary", "dep:lsp-server", "dep:lsp-types"]
 stdlib-fs = ["dep:notify", "dep:walkdir"]
@@ -107,6 +114,12 @@ typescript-type-def = { version = "0.5.9", optional = true }
 uniffi = { version = "0.31", optional = true }
 # import-csv
 csv = { version = "1.3.0", optional = true }
+# compile-scripts
+swc_ts_fast_strip = { version = "59", optional = true }
+swc_common = { version = "26", optional = true }
+swc_ecma_ast = { version = "29", optional = true }
+swc_ecma_parser = { version = "46", features = ["typescript"], optional = true }
+swc_ecma_visit = { version = "29", optional = true }
 # proto
 prost = { version = "0.14.1", optional = true }
 # shared

@@ -105,7 +105,7 @@ pub fn watch_with(options: DevServerOptions) -> Result<crate::binary::ExitStatus
             manifest.uploads_url = Some(uploads_url.to_string());
         })?;
     }
-    site.sync_static_files(&mut fs)?;
+    let initial_sync = site.sync_static_files(&mut fs);
     let (tx, rx) = mpsc::channel();
     let initial_build = site.build(&mut fs, BuildOptions::default());
     let mut init_message = format!("Watching site: {}", site);
@@ -186,15 +186,19 @@ pub fn watch_with(options: DevServerOptions) -> Result<crate::binary::ExitStatus
     // parsed into memory once at load time; invalidate_file only clears caches
     // and never refreshes it. Track edits to it so we can reload the site.
     let mut object_definitions_changed = false;
-    // Static files are synced at startup, so rebuilds only need to re-sync
-    // them when a file inside the static dir actually changed.
-    let mut static_files_changed = false;
+    // Static files are synced at startup, so rebuilds only need to re-sync them when
+    // a file inside the static or scripts dir changed, or the last sync failed.
+    let mut static_files_changed = initial_sync.is_err();
     #[cfg(feature = "carriers")]
     let mut carriers_changed = false;
     // The first payload is pushed once, whether or not anything rebuilds.
     #[cfg(feature = "carriers")]
     let mut carrier_objects_stale = true;
     term.write(init_message.as_bytes())?;
+    if let Err(e) = initial_sync {
+        let bar = ProgressBar::new_spinner();
+        bar.finish_with_message(format!("Static file sync failed: {}", e));
+    }
     if let Err(e) = initial_build {
         let bar = ProgressBar::new_spinner();
         bar.finish_with_message(format!("Initial build failed: {}", e));
@@ -225,7 +229,13 @@ pub fn watch_with(options: DevServerOptions) -> Result<crate::binary::ExitStatus
                     if changed_file == site.manifest.object_definition_file {
                         object_definitions_changed = true;
                     }
-                    if changed_file.starts_with(&site.manifest.static_dir) {
+                    if changed_file.starts_with(&site.manifest.static_dir)
+                        || site
+                            .manifest
+                            .scripts_dir
+                            .as_ref()
+                            .is_some_and(|dir| changed_file.starts_with(dir))
+                    {
                         static_files_changed = true;
                     }
                     site.invalidate_file(changed_file);
@@ -308,30 +318,37 @@ pub fn watch_with(options: DevServerOptions) -> Result<crate::binary::ExitStatus
                 // Reloading the site clears its static file cache (and may
                 // change the static dir), so sync in that case too.
                 let sync_result = if static_files_changed || site_reloaded {
-                    static_files_changed = false;
                     site.sync_static_files(&mut fs)
                 } else {
                     Ok(())
                 };
+                static_files_changed = sync_result.is_err();
+                let mut lines = vec![];
                 if let Err(e) = sync_result {
-                    format!(
+                    lines.push(format!(
                         "{} {}",
                         style("Static file sync failed:").red(),
                         style(e).red()
-                    )
-                } else if let Err(e) = site.build(&mut fs, BuildOptions::default()) {
-                    format!("{} {}", style("Build failed:").red(), style(e).red())
+                    ));
+                }
+                if let Err(e) = site.build(&mut fs, BuildOptions::default()) {
+                    lines.push(format!(
+                        "{} {}",
+                        style("Build failed:").red(),
+                        style(e).red()
+                    ));
                 } else {
                     #[cfg(feature = "carriers")]
                     {
                         carrier_objects_stale = true;
                     }
-                    format!(
+                    lines.push(format!(
                         "{} {:?}",
                         style("Rebuilt in").green(),
                         style(Instant::now() - last_build).green()
-                    )
+                    ));
                 }
+                lines.join("\n")
             };
             if let Some(bar) = bar {
                 bar.finish_with_message(output);

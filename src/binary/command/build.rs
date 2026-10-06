@@ -6,7 +6,7 @@ use crate::{
     },
     file_system_stdlib,
     site::Site,
-    BuildOptions,
+    BuildOptions, ScriptErrors,
 };
 use anyhow::Result;
 use clap::{arg, value_parser, ArgMatches};
@@ -59,10 +59,15 @@ impl BinaryCommand for Command {
             let cwd = std::env::current_dir().unwrap();
             site.manifest.build_dir = lexical_normalize(cwd.join(build_dir_arg));
         }
-        site.sync_static_files(&mut fs)?;
         let mut options = BuildOptions::default();
         if args.get_flag("skip-failures") {
             options.skip_failures = true;
+        }
+        if let Err(e) = site.sync_static_files(&mut fs) {
+            match e.downcast_ref::<ScriptErrors>() {
+                Some(errors) if options.skip_failures => eprintln!("warning: {errors}"),
+                _ => return Err(e),
+            }
         }
         site.build(&mut fs, options)?;
         Ok(ExitStatus::Ok)

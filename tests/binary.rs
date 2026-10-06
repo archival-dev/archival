@@ -207,6 +207,97 @@ mod binary_tests {
         // _ = fs::remove_dir_all(site_path);
     }
 
+    fn copy_fixture_site() -> String {
+        _ = fs::create_dir("tests/fixtures/tmp");
+        let site_path = format!("tests/fixtures/tmp/{}", nanoid!());
+        copy_dir_all("tests/fixtures/website", &site_path).unwrap();
+        site_path
+    }
+
+    #[cfg(feature = "compile-scripts")]
+    #[test]
+    #[traced_test]
+    fn build_compiles_scripts() {
+        let site_path = copy_fixture_site();
+        fs::create_dir_all(format!("{site_path}/scripts")).unwrap();
+        let script = format!("{site_path}/scripts/main.ts");
+        fs::write(&script, "export const answer: number = 42;\n").unwrap();
+        let build = || {
+            archival::binary::binary(
+                get_args(vec!["build", &site_path, "--upload-prefix", "test"]),
+                None,
+            )
+        };
+
+        build().unwrap();
+        assert_eq!(
+            fs::read_to_string(format!("{site_path}/dist/js/main.js")).unwrap(),
+            "export const answer         = 42;\n"
+        );
+
+        fs::write(&script, "enum Broken { A }\n").unwrap();
+        let Err(err) = build() else {
+            panic!("a broken script built");
+        };
+        assert!(err.to_string().contains("main.ts:1:1"), "{err}");
+        _ = fs::remove_dir_all(site_path);
+    }
+
+    #[cfg(feature = "compile-scripts")]
+    #[test]
+    #[traced_test]
+    fn run_recompiles_changed_scripts() {
+        let site_path = copy_fixture_site();
+        fs::create_dir_all(format!("{site_path}/scripts")).unwrap();
+        let script = format!("{site_path}/scripts/main.ts");
+        let output = format!("{site_path}/dist/js/main.js");
+        fs::write(&script, "export const a: number = 1;\n").unwrap();
+        let mut run_cmd = Command::new(env!("CARGO_BIN_EXE_archival"))
+            .args(["run", &site_path, "--upload-prefix", "test"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stream = run_cmd.stdout.take().unwrap();
+        let (sender, receiver) = sync::mpsc::channel();
+        thread::spawn(move || loop {
+            let mut buf = [0];
+            match stream.read(&mut buf) {
+                Ok(len) if len > 0 => {
+                    if sender.send(buf).is_err() {
+                        return;
+                    }
+                }
+                _ => return,
+            }
+        });
+        run_until(&receiver, "Serving", Duration::from_millis(60_000));
+        let wait_for = |contents: &str| {
+            let start = Instant::now();
+            while fs::read_to_string(&output).ok().as_deref() != Some(contents) {
+                assert!(
+                    Instant::now() - start < Duration::from_millis(10_000),
+                    "{output} never became {contents:?}"
+                );
+                thread::sleep(Duration::from_millis(50));
+            }
+        };
+        wait_for("export const a         = 1;\n");
+
+        fs::write(&script, "export const a: number = 2;\n").unwrap();
+        wait_for("export const a         = 2;\n");
+
+        fs::write(&script, "enum Broken { A }\n").unwrap();
+        run_until(&receiver, "main.ts:1:1", Duration::from_millis(10_000));
+        assert_eq!(
+            fs::read_to_string(&output).unwrap(),
+            "export const a         = 2;\n"
+        );
+        run_cmd.kill().unwrap();
+        run_cmd.wait().unwrap();
+        _ = fs::remove_dir_all(site_path);
+    }
+
     fn run_until(
         receiver: &sync::mpsc::Receiver<[u8; 1]>,
         until_seen: &str,

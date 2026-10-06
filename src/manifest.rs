@@ -6,12 +6,14 @@ use std::{
     fmt::{self, Display},
     hash::Hash,
     ops::Deref,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 use toml::{Table, Value};
 
 use crate::{
-    constants::{LAYOUT_DIR_NAME, NESTED_TYPES, SCHEMAS_DIR_NAME},
+    constants::{
+        LAYOUT_DIR_NAME, NESTED_TYPES, SCHEMAS_DIR_NAME, SCRIPTS_BUILD_DIR_NAME, SCRIPTS_DIR_NAME,
+    },
     file_system::FileSystemAPI,
     object::ValuePath,
 };
@@ -46,6 +48,8 @@ pub enum InvalidManifestError {
     InvalidField(Value, String),
     #[error("Invalid Metadata value '{1}' for field {0}.")]
     InvalidMetadata(Value, String),
+    #[error("scripts_build_dir ({0}) must be a relative path inside build_dir")]
+    ScriptsBuildDirOutsideBuildDir(String),
 }
 
 #[derive(Debug, Clone)]
@@ -242,6 +246,10 @@ pub struct Manifest {
     pub build_dir: PathBuf,
     pub static_dir: PathBuf,
     pub layout_dir: PathBuf,
+    /// `None` when the manifest sets `scripts_dir = false`.
+    pub scripts_dir: Option<PathBuf>,
+    /// Relative to `build_dir`.
+    pub scripts_build_dir: PathBuf,
     pub uploads_url: Option<String>,
     #[cfg_attr(feature = "typescript", type_def(type_of = "typedefs::EditorTypesDef"))]
     pub editor_types: EditorTypes,
@@ -270,6 +278,8 @@ pub enum ManifestField {
     StaticDir,
     SchemasDir,
     LayoutDir,
+    ScriptsDir,
+    ScriptsBuildDir,
     UploadsUrl,
     EditorTypes,
     Metadata,
@@ -291,6 +301,8 @@ impl ManifestField {
             ManifestField::StaticDir => "static_dir",
             ManifestField::SchemasDir => "schemas_dir",
             ManifestField::LayoutDir => "layout_dir",
+            ManifestField::ScriptsDir => "scripts_dir",
+            ManifestField::ScriptsBuildDir => "scripts_build_dir",
             ManifestField::UploadsUrl => "uploads_url",
             ManifestField::EditorTypes => "editor_types",
             ManifestField::Metadata => "metadata",
@@ -312,6 +324,7 @@ impl fmt::Display for Manifest {
         pages: {}
         static files: {}
         layout dir: {}
+        scripts: {}
         build dir: {}{}
         {}
         "#,
@@ -326,6 +339,14 @@ impl fmt::Display for Manifest {
             self.pages_dir.display(),
             self.static_dir.display(),
             self.layout_dir.display(),
+            match &self.scripts_dir {
+                Some(scripts_dir) => format!(
+                    "{} -> {}",
+                    scripts_dir.display(),
+                    self.build_dir.join(&self.scripts_build_dir).display()
+                ),
+                None => "off".to_string(),
+            },
             self.build_dir.display(),
             self.metadata
                 .as_ref()
@@ -421,6 +442,8 @@ impl Manifest {
             build_dir: root.join(BUILD_DIR_NAME),
             static_dir: root.join(STATIC_DIR_NAME),
             layout_dir: root.join(LAYOUT_DIR_NAME),
+            scripts_dir: Some(root.join(SCRIPTS_DIR_NAME)),
+            scripts_build_dir: PathBuf::from(SCRIPTS_BUILD_DIR_NAME),
             editor_types: EditorTypes::new(),
             metadata: None,
         }
@@ -462,6 +485,10 @@ impl Manifest {
             ManifestField::SchemasDir => {
                 str_value == self.root.join(SCHEMAS_DIR_NAME).to_string_lossy()
             }
+            ManifestField::ScriptsDir => {
+                str_value == self.root.join(SCRIPTS_DIR_NAME).to_string_lossy()
+            }
+            ManifestField::ScriptsBuildDir => str_value == SCRIPTS_BUILD_DIR_NAME,
             _ => str_value.is_empty(),
         }
     }
@@ -517,6 +544,22 @@ impl Manifest {
                 "static_dir" => manifest.static_dir = path_or_err(value, "static_dir")?,
                 "schemas_dir" => manifest.schemas_dir = path_or_err(value, "schemas_dir")?,
                 "layout_dir" => manifest.layout_dir = path_or_err(value, "layout_dir")?,
+                "scripts_dir" => {
+                    manifest.scripts_dir = match value {
+                        Value::Boolean(false) => None,
+                        value => Some(path_or_err(value, "scripts_dir")?),
+                    }
+                }
+                "scripts_build_dir" => {
+                    manifest.scripts_build_dir =
+                        value
+                            .as_str()
+                            .map(PathBuf::from)
+                            .ok_or(InvalidManifestError::BadPath(
+                                value,
+                                "scripts_build_dir".into(),
+                            ))?
+                }
                 "object_file" => {
                     manifest.object_definition_file = path_or_err(value, "object_file")?
                 }
@@ -526,6 +569,7 @@ impl Manifest {
             }
         }
         manifest.validate_build_dir()?;
+        manifest.scripts_build_path()?;
         Ok(manifest)
     }
 
@@ -540,7 +584,10 @@ impl Manifest {
             ("pages", &self.pages_dir),
             ("layout_dir", &self.layout_dir),
             ("static_dir", &self.static_dir),
-        ] {
+        ]
+        .into_iter()
+        .chain(self.scripts_dir.as_ref().map(|dir| ("scripts_dir", dir)))
+        {
             if self.build_dir.starts_with(dir) || dir.starts_with(&self.build_dir) {
                 return Err(InvalidManifestError::BuildDirOverlapsSource(
                     self.build_dir.to_string_lossy().to_string(),
@@ -551,6 +598,22 @@ impl Manifest {
             }
         }
         Ok(())
+    }
+
+    /// Where compiled scripts land: `scripts_build_dir` joined onto `build_dir`, which
+    /// it may not climb out of.
+    pub fn scripts_build_path(&self) -> Result<PathBuf, InvalidManifestError> {
+        if self
+            .scripts_build_dir
+            .components()
+            .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
+        {
+            Ok(self.build_dir.join(&self.scripts_build_dir))
+        } else {
+            Err(InvalidManifestError::ScriptsBuildDirOutsideBuildDir(
+                self.scripts_build_dir.to_string_lossy().to_string(),
+            ))
+        }
     }
 
     pub fn from_file(
@@ -605,6 +668,13 @@ impl Manifest {
             ManifestField::LayoutDir => {
                 Some(Value::String(self.layout_dir.to_string_lossy().to_string()))
             }
+            ManifestField::ScriptsDir => Some(match &self.scripts_dir {
+                Some(scripts_dir) => Value::String(scripts_dir.to_string_lossy().to_string()),
+                None => Value::Boolean(false),
+            }),
+            ManifestField::ScriptsBuildDir => Some(Value::String(
+                self.scripts_build_dir.to_string_lossy().to_string(),
+            )),
             ManifestField::Metadata => self.metadata.as_ref().map(|metadata| {
                 let mut map = toml::map::Map::new();
                 for (key, v) in metadata {
@@ -752,6 +822,10 @@ impl Manifest {
             ManifestField::StaticDir => self.static_dir = PathBuf::from(value),
             ManifestField::SchemasDir => self.schemas_dir = PathBuf::from(value),
             ManifestField::LayoutDir => self.layout_dir = PathBuf::from(value),
+            ManifestField::ScriptsDir => {
+                self.scripts_dir = (value != "false").then(|| PathBuf::from(value))
+            }
+            ManifestField::ScriptsBuildDir => self.scripts_build_dir = PathBuf::from(value),
             ManifestField::Metadata => {
                 panic!("Metadata is not modifiable via events")
             }
@@ -767,6 +841,7 @@ impl Manifest {
                 Value::Array(a) => toml::to_string(&a).unwrap_or_default(),
                 Value::String(s) => s,
                 Value::Table(t) => toml::to_string(&t).unwrap_or_default(),
+                Value::Boolean(b) => b.to_string(),
                 _ => panic!("unsupported manifest field type"),
             },
             None => String::default(),
@@ -788,6 +863,8 @@ impl Manifest {
             ManifestField::ObjectsDir,
             ManifestField::LayoutDir,
             ManifestField::SchemasDir,
+            ManifestField::ScriptsDir,
+            ManifestField::ScriptsBuildDir,
             ManifestField::EditorTypes,
             ManifestField::Metadata,
         ]
@@ -814,7 +891,8 @@ impl Manifest {
             &self.static_dir,
             &self.layout_dir,
         ]
-        .iter()
+        .into_iter()
+        .chain(&self.scripts_dir)
         .map(|p| p.to_string_lossy().into_owned())
         .collect()
     }
@@ -841,6 +919,8 @@ pages = "m_pages"
 objects = "m_objects"
 layout_dir = "m_layout"
 schemas_dir = "m_schemas"
+scripts_dir = "m_scripts"
+scripts_build_dir = "m_js"
 
 [editor_types.day]
 type = "date"
@@ -874,6 +954,8 @@ baz = "hello!"
             "static_dir = \"dist/public\"\n",
             "build_dir = \"pages\"\n",
             "objects = \"dist\"\n",
+            "scripts_dir = \"dist/scripts\"\n",
+            "build_dir = \"scripts/dist\"\n",
         ] {
             let result = Manifest::from_string(Path::new(""), manifest.to_string(), Some("test"));
             assert!(
@@ -881,6 +963,47 @@ baz = "hello!"
                 "overlapping directories were accepted: {manifest}"
             );
         }
+    }
+
+    #[test]
+    fn scripts_build_from_scripts_into_js_by_default() -> Result<()> {
+        let m = Manifest::from_string(Path::new(""), String::new(), Some("test"))?;
+        assert_eq!(m.scripts_dir, Some(PathBuf::from("scripts")));
+        assert_eq!(m.scripts_build_path()?, PathBuf::from("dist/js"));
+        assert!(m.watched_paths().contains(&"scripts".to_string()));
+        let toml = m.to_toml()?;
+        assert!(!toml.contains("scripts"), "{toml}");
+        Ok(())
+    }
+
+    #[test]
+    fn scripts_dir_false_turns_scripts_off() -> Result<()> {
+        let m = Manifest::from_string(Path::new(""), "scripts_dir = false\n".into(), Some("t"))?;
+        assert_eq!(m.scripts_dir, None);
+        assert!(!m.watched_paths().iter().any(|p| p.contains("scripts")));
+        let toml = m.to_toml()?;
+        assert!(toml.contains("scripts_dir = false"), "{toml}");
+        let reparsed = Manifest::from_string(Path::new(""), toml, Some("t"))?;
+        assert_eq!(reparsed, m);
+        Ok(())
+    }
+
+    #[test]
+    fn scripts_build_dir_stays_inside_build_dir() -> Result<()> {
+        let root = Manifest::from_string(Path::new(""), "scripts_build_dir = \"\"\n".into(), None)?;
+        assert_eq!(root.scripts_build_path()?, PathBuf::from("dist"));
+        for manifest in [
+            "scripts_build_dir = \"../js\"\n",
+            "scripts_build_dir = \"js/../../x\"\n",
+            "scripts_build_dir = \"/js\"\n",
+            "scripts_dir = true\n",
+        ] {
+            assert!(
+                Manifest::from_string(Path::new(""), manifest.to_string(), None).is_err(),
+                "accepted {manifest}"
+            );
+        }
+        Ok(())
     }
 
     #[test]
@@ -905,6 +1028,8 @@ baz = "hello!"
         assert_eq!(m.static_dir, Path::new("m_public").to_path_buf());
         assert_eq!(m.layout_dir, Path::new("m_layout").to_path_buf());
         assert_eq!(m.schemas_dir, Path::new("m_schemas").to_path_buf());
+        assert_eq!(m.scripts_dir, Some(Path::new("m_scripts").to_path_buf()));
+        assert_eq!(m.scripts_build_dir, Path::new("m_js").to_path_buf());
         assert_eq!(m.site_name, Some("jesse's site".to_string()));
         assert_eq!(
             m.uploads_url,
