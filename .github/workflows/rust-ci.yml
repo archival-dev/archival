@@ -122,7 +122,7 @@ jobs:
           version: 33.1
       - uses: dtolnay/rust-toolchain@master
         with:
-          # kstring (via liquid-core) requires 1.96.
+          # Must match rust-version in Cargo.toml; kstring (via liquid-core) requires 1.96.
           toolchain: "1.96.0"
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.9
