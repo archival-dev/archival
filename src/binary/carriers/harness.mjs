@@ -388,6 +388,14 @@ const makeActivityPub = (name) => {
     likes: emptyPage,
     boosts: emptyPage,
     replies: emptyPage,
+    setLocalLikes: async (post, likes) => {
+      postPath(post);
+      if (!Number.isSafeInteger(likes) || likes < 0) {
+        throw new Error(
+          name + ".setLocalLikes needs a whole number of likes, 0 or more",
+        );
+      }
+    },
   });
 };
 

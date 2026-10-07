@@ -174,6 +174,14 @@ test("each carrier API version is called its own way", async () => {
     site.activitypub.likes({ name: "no path" }),
     /site\.activitypub needs a post/,
   );
+  assert.equal(
+    await site.activitypub.setLocalLikes({ path: "artist/a" }, 3),
+    undefined,
+  );
+  await assert.rejects(
+    site.activitypub.setLocalLikes("artist/a", -1),
+    /site\.activitypub\.setLocalLikes needs a whole number of likes/,
+  );
 });
 
 test("site.sql keeps what it is given in its database file", sqlite, async () => {
