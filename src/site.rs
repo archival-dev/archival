@@ -13,6 +13,7 @@ use crate::{
     },
     read_toml::read_toml,
     scripts::{self, ScriptCollision, ScriptErrors, ScriptFailure, ScriptKind},
+    sitemap::{self, ROBOTS_FILE_NAME, SITEMAP_FILE_NAME},
     tags::layout,
     util::path_to_slash,
     ArchivalError, BuildOptions, FieldConfig, FileSystemAPI, ObjectMap,
@@ -1177,8 +1178,44 @@ impl Site {
             }
         }
 
+        self.plan_sitemap(&mut plan, build_dir);
         plan.delete_unvisited(&self.build_cache);
         Ok(plan)
+    }
+
+    /// A site with a `site_url` gets a sitemap.xml listing every page in `plan` and a
+    /// robots.txt naming it, each unless its pages build their own. A static file at
+    /// either path still takes precedence when the plan is applied.
+    fn plan_sitemap(&self, plan: &mut WritePlan, build_dir: &Path) {
+        if !self.manifest.sitemap {
+            return;
+        }
+        let Some(site_url) = self
+            .manifest
+            .absolute_site_url()
+            .filter(|site_url| !site_url.is_empty())
+        else {
+            return;
+        };
+        let sitemap_path = build_dir.join(SITEMAP_FILE_NAME);
+        let robots_path = build_dir.join(ROBOTS_FILE_NAME);
+        let defaults = {
+            let built = plan.visited();
+            let urlset = (!built.contains(&sitemap_path)).then(|| {
+                let pages = built
+                    .iter()
+                    .filter_map(|output| output.strip_prefix(build_dir).ok());
+                sitemap::urlset(&site_url, pages)
+            });
+            let robots = (!built.contains(&robots_path)).then(|| sitemap::robots(&site_url));
+            [(sitemap_path, urlset), (robots_path, robots)]
+        };
+        for (path, contents) in defaults {
+            if let Some(contents) = contents {
+                let hash = hash_file(contents.as_bytes());
+                plan.record(&self.build_cache, None, path, contents.into_bytes(), hash);
+            }
+        }
     }
 
     #[instrument(skip(self, template, base_context, signatures, liquid_parser, plan))]
@@ -1730,6 +1767,144 @@ mod tests {
             Some("https://example.com/about")
         );
         assert_eq!(site.manifest.site_url.as_deref(), Some("example.com"));
+        Ok(())
+    }
+
+    fn sitemap_site(manifest: &str) -> Result<MemoryFileSystem> {
+        let mut fs = MemoryFileSystem::default();
+        fs.write_str(Path::new(MANIFEST_FILE_NAME), manifest.to_string())?;
+        fs.write_str(
+            Path::new(OBJECT_DEFINITION_FILE_NAME),
+            "[post]\nname = \"string\"\ntemplate = \"post\"\n".to_string(),
+        )?;
+        fs.write_str(
+            Path::new("objects/post/a-post.toml"),
+            "name = \"A Post\"\n".to_string(),
+        )?;
+        for page in [
+            "index.liquid",
+            "about.liquid",
+            "404.liquid",
+            "blog/index.liquid",
+            "llms.txt.liquid",
+            "_card.liquid",
+            "post.liquid",
+        ] {
+            fs.write_str(Path::new("pages").join(page), "page\n".to_string())?;
+        }
+        Ok(fs)
+    }
+
+    fn built(fs: &MemoryFileSystem, site: &Site, file: &str) -> Result<Option<String>> {
+        fs.read_to_string(site.manifest.build_dir.join(file))
+    }
+
+    #[test]
+    fn a_site_with_a_site_url_gets_a_default_sitemap_and_robots() -> Result<()> {
+        let mut fs = sitemap_site("site_url = \"example.com\"\n")?;
+        let site = Site::load(&fs, Some("test"))?;
+        site.build(&mut fs, BuildOptions::default())?;
+        assert_eq!(
+            built(&fs, &site, "sitemap.xml")?.as_deref(),
+            Some(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+                 <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n  \
+                 <url><loc>https://example.com/</loc></url>\n  \
+                 <url><loc>https://example.com/about</loc></url>\n  \
+                 <url><loc>https://example.com/blog/</loc></url>\n  \
+                 <url><loc>https://example.com/post/a-post</loc></url>\n\
+                 </urlset>\n"
+            )
+        );
+        assert_eq!(
+            built(&fs, &site, "robots.txt")?.as_deref(),
+            Some("User-agent: *\nAllow: /\n\nSitemap: https://example.com/sitemap.xml\n")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_site_without_a_site_url_or_with_sitemap_false_gets_no_default_sitemap() -> Result<()> {
+        for manifest in ["", "site_url = \"https://example.com\"\nsitemap = false\n"] {
+            let mut fs = sitemap_site(manifest)?;
+            let site = Site::load(&fs, Some("test"))?;
+            site.build(&mut fs, BuildOptions::default())?;
+            assert_eq!(built(&fs, &site, "sitemap.xml")?, None, "{manifest:?}");
+            assert_eq!(built(&fs, &site, "robots.txt")?, None, "{manifest:?}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn turning_the_default_sitemap_off_removes_it() -> Result<()> {
+        let mut fs = sitemap_site("site_url = \"https://example.com\"\n")?;
+        let mut site = Site::load(&fs, Some("test"))?;
+        site.build(&mut fs, BuildOptions::default())?;
+        assert!(built(&fs, &site, "sitemap.xml")?.is_some());
+        site.manifest.sitemap = false;
+        site.build(&mut fs, BuildOptions::default())?;
+        assert_eq!(built(&fs, &site, "sitemap.xml")?, None);
+        assert_eq!(built(&fs, &site, "robots.txt")?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn a_sitemap_page_replaces_the_default_sitemap() -> Result<()> {
+        let mut fs = sitemap_site("site_url = \"https://example.com\"\n")?;
+        fs.write_str(
+            Path::new("pages/sitemap.xml.liquid"),
+            "their sitemap\n".to_string(),
+        )?;
+        let site = Site::load(&fs, Some("test"))?;
+        site.build(&mut fs, BuildOptions::default())?;
+        assert_eq!(
+            built(&fs, &site, "sitemap.xml")?.as_deref(),
+            Some("their sitemap\n")
+        );
+        assert!(built(&fs, &site, "robots.txt")?
+            .is_some_and(|robots| robots.contains("Sitemap: https://example.com/sitemap.xml")));
+        Ok(())
+    }
+
+    #[test]
+    fn a_robots_page_keeps_the_default_sitemap() -> Result<()> {
+        let mut fs = sitemap_site("site_url = \"https://example.com\"\n")?;
+        fs.write_str(
+            Path::new("pages/robots.txt.liquid"),
+            "their robots\n".to_string(),
+        )?;
+        let site = Site::load(&fs, Some("test"))?;
+        site.build(&mut fs, BuildOptions::default())?;
+        assert!(built(&fs, &site, "sitemap.xml")?.is_some_and(|xml| xml.contains("/about<")));
+        assert_eq!(
+            built(&fs, &site, "robots.txt")?.as_deref(),
+            Some("their robots\n")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn static_files_shadow_the_default_sitemap_and_robots() -> Result<()> {
+        let mut fs = sitemap_site("site_url = \"https://example.com\"\n")?;
+        fs.write_str(
+            Path::new("public/sitemap.xml"),
+            "static sitemap\n".to_string(),
+        )?;
+        fs.write_str(
+            Path::new("public/robots.txt"),
+            "static robots\n".to_string(),
+        )?;
+        let site = Site::load(&fs, Some("test"))?;
+        site.sync_static_files(&mut fs)?;
+        site.build(&mut fs, BuildOptions::default())?;
+        assert_eq!(
+            built(&fs, &site, "sitemap.xml")?.as_deref(),
+            Some("static sitemap\n")
+        );
+        assert_eq!(
+            built(&fs, &site, "robots.txt")?.as_deref(),
+            Some("static robots\n")
+        );
         Ok(())
     }
 

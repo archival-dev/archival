@@ -110,6 +110,7 @@ fn all_manifest_fields() -> Vec<ManifestField> {
         ManifestField::UploadsUrl,
         ManifestField::EditorTypes,
         ManifestField::Metadata,
+        ManifestField::Sitemap,
     ];
     for field in &all {
         match field {
@@ -129,7 +130,8 @@ fn all_manifest_fields() -> Vec<ManifestField> {
             | ManifestField::ScriptsBuildDir
             | ManifestField::UploadsUrl
             | ManifestField::EditorTypes
-            | ManifestField::Metadata => {}
+            | ManifestField::Metadata
+            | ManifestField::Sitemap => {}
         }
     }
     all

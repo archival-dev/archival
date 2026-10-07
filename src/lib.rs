@@ -27,6 +27,7 @@ mod schema_files;
 pub mod schemas;
 mod scripts;
 mod site;
+mod sitemap;
 mod tags;
 #[cfg(test)]
 mod test_utils;
