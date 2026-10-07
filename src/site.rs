@@ -871,9 +871,9 @@ impl Site {
             let dest = out_dir.join(rel_out);
             if let Some(static_file) = static_sources.get(&dest) {
                 return Err(ScriptCollision {
-                    static_file: static_file.to_string_lossy().to_string(),
-                    script: from.to_string_lossy().to_string(),
-                    dest: dest.to_string_lossy().to_string(),
+                    static_file: path_to_slash(static_file),
+                    script: path_to_slash(&from),
+                    dest: path_to_slash(&dest),
                 }
                 .into());
             }
@@ -933,7 +933,7 @@ impl Site {
         }
         let compiled = String::from_utf8(source)
             .map_err(|_| ScriptFailure {
-                message: format!("{}: not valid UTF-8", from.display()),
+                message: format!("{}: not valid UTF-8", path_to_slash(&from)),
                 path: from.clone(),
             })
             .and_then(|source| scripts::compile(&source, &from));

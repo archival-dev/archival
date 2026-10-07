@@ -208,6 +208,17 @@ const openDatabase = (name, file) => {
   return opening;
 };
 
+/** Windows will not remove a database file while a connection holds it open. */
+export const closeDatabases = async () => {
+  const opening = [...databases.values()];
+  databases.clear();
+  for (const result of await Promise.allSettled(opening)) {
+    if (result.status === "fulfilled") {
+      result.value.close();
+    }
+  }
+};
+
 /**
  * A bound value as a deployed carrier's database receives it, which is after
  * a round trip through JSON: a Date arrives as its ISO string, NaN as null.

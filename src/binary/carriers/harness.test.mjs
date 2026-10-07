@@ -18,6 +18,7 @@ import test from "node:test";
 import {
   buildAndLoad,
   carrierApiVersion,
+  closeDatabases,
   invokeCarrier,
   parseRequestBody,
   readCarrierFiles,
@@ -26,7 +27,8 @@ import {
 import * as toolchain from "./toolchain.mjs";
 
 const dirs = [];
-test.after(() => {
+test.after(async () => {
+  await closeDatabases();
   for (const dir of dirs) {
     rmSync(dir, { recursive: true, force: true });
   }

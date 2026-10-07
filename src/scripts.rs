@@ -91,6 +91,7 @@ pub(crate) use strip::compile;
 #[cfg(feature = "compile-scripts")]
 mod strip {
     use super::ScriptFailure;
+    use crate::util::path_to_slash;
     use std::path::Path;
     use std::sync::{Arc, Mutex};
     use swc_common::{
@@ -124,7 +125,7 @@ mod strip {
     }
 
     pub(crate) fn compile(source: &str, path: &Path) -> Result<String, ScriptFailure> {
-        let display = path.to_string_lossy().into_owned();
+        let display = path_to_slash(path);
         let source = rewrite_specifiers(source);
         let cm: Lrc<SourceMap> = Default::default();
         let reported = Reported::default();
