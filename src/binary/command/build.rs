@@ -31,6 +31,25 @@ fn lexical_normalize(path: impl AsRef<Path>) -> PathBuf {
     out
 }
 
+/// `path` relative to `base`, climbing out of it with `..`, because
+/// `NativeFileSystem` reads a rooted path as relative to its root.
+fn relative_to(path: &Path, base: &Path) -> PathBuf {
+    let common = path
+        .components()
+        .zip(base.components())
+        .take_while(|(a, b)| a == b)
+        .count();
+    // Different windows prefixes share nothing; joining a prefixed path replaces the root.
+    if common == 0 {
+        return path.to_path_buf();
+    }
+    base.components()
+        .skip(common)
+        .map(|_| Component::ParentDir)
+        .chain(path.components().skip(common))
+        .collect()
+}
+
 pub struct Command {}
 impl BinaryCommand for Command {
     fn name(&self) -> &str {
@@ -57,7 +76,9 @@ impl BinaryCommand for Command {
         println!("Building site: {}", site);
         if let Some(build_dir_arg) = args.get_one::<PathBuf>("build-dir") {
             let cwd = std::env::current_dir().unwrap();
-            site.manifest.build_dir = lexical_normalize(cwd.join(build_dir_arg));
+            site.manifest.build_dir =
+                relative_to(&lexical_normalize(cwd.join(build_dir_arg)), &root_dir);
+            site.manifest.validate_build_dir()?;
         }
         let mut options = BuildOptions::default();
         if args.get_flag("skip-failures") {

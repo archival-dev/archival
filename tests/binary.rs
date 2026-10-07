@@ -3,7 +3,7 @@ mod binary_tests {
     use std::{
         fs,
         io::Read,
-        path::Path,
+        path::{Component, Path, PathBuf},
         process::{Command, Stdio},
         sync, thread,
         time::{Duration, Instant},
@@ -212,6 +212,57 @@ mod binary_tests {
         let site_path = format!("tests/fixtures/tmp/{}", nanoid!());
         copy_dir_all("tests/fixtures/website", &site_path).unwrap();
         site_path
+    }
+
+    #[test]
+    #[traced_test]
+    fn build_to_an_absolute_dir_outside_the_site() {
+        let site_path = copy_fixture_site();
+        let out = tempfile::tempdir().unwrap();
+        let out_path = out.path().to_str().unwrap();
+        archival::binary::binary(
+            get_args(vec![
+                "build",
+                "-b",
+                out_path,
+                &site_path,
+                "--upload-prefix",
+                "test",
+            ]),
+            None,
+        )
+        .unwrap();
+        assert!(out.path().join("index.html").exists());
+        let nested = Path::new(&site_path).join(
+            out.path()
+                .components()
+                .filter(|c| matches!(c, Component::Normal(_)))
+                .collect::<PathBuf>(),
+        );
+        assert!(!nested.exists(), "built into {}", nested.display());
+        _ = fs::remove_dir_all(site_path);
+    }
+
+    #[test]
+    #[traced_test]
+    fn build_to_a_dir_relative_to_cwd() {
+        let site_path = copy_fixture_site();
+        let out_path = format!("{site_path}-out");
+        archival::binary::binary(
+            get_args(vec![
+                "build",
+                "-b",
+                &out_path,
+                &site_path,
+                "--upload-prefix",
+                "test",
+            ]),
+            None,
+        )
+        .unwrap();
+        assert!(Path::new(&out_path).join("index.html").exists());
+        _ = fs::remove_dir_all(site_path);
+        _ = fs::remove_dir_all(out_path);
     }
 
     #[cfg(feature = "compile-scripts")]
