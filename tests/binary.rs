@@ -3,7 +3,7 @@ mod binary_tests {
     use std::{
         fs,
         io::Read,
-        path::Path,
+        path::{Component, Path, PathBuf},
         process::{Command, Stdio},
         sync, thread,
         time::{Duration, Instant},
@@ -233,7 +233,12 @@ mod binary_tests {
         )
         .unwrap();
         assert!(out.path().join("index.html").exists());
-        let nested = Path::new(&site_path).join(out.path().strip_prefix("/").unwrap());
+        let nested = Path::new(&site_path).join(
+            out.path()
+                .components()
+                .filter(|c| matches!(c, Component::Normal(_)))
+                .collect::<PathBuf>(),
+        );
         assert!(!nested.exists(), "built into {}", nested.display());
         _ = fs::remove_dir_all(site_path);
     }
