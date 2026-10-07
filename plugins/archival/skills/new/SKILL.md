@@ -253,8 +253,8 @@ customer. Work in passes, and publish each one.
 
 `reference/conventions.md` is the checklist for both modes: content in objects
 rather than markup, the identity object, `archival_editor.toml`, the pages
-machines read (`llms.txt`, a feed, a sitemap), metadata, JSON-LD and
-accessibility. A site that fails it is one the person cannot keep editing.
+machines read (`llms.txt`, a feed, a sitemap), metadata and canonical URLs,
+JSON-LD and accessibility. A site that fails it is one the person cannot keep editing.
 
 In code mode, `archival run .` serves the site at `http://localhost:1024` with
 live reload while you work (`reference/local.md`, D). In a chat there is no
@@ -269,4 +269,4 @@ event and menu pages.
 Carriers — Archival's serverless functions — are not available here and cannot
 be previewed; a preview whose source contains `carriers/` is refused. If someone
 needs forms that submit, logins, or a database, say that plainly and point them
-at <https://archival.dev/docs/carriers.html>.
+at <https://archival.dev/docs/carriers>.

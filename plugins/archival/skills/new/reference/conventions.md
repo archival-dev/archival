@@ -38,7 +38,8 @@ grep -rn "<the business name>" pages layout public
   members, testimonials, locations. One file per item under `objects/<type>/`,
   each with an `order` field.
 - `template = "<type>"` on every type a visitor clicks through to. Each item
-  renders at `/<type>/<filename>.html` and is linked as `/{{ item.path }}.html`.
+  renders to `dist/<type>/<filename>.html`, is served at `/<type>/<filename>`,
+  and is linked as `/{{ item.path }}`. Never link with `.html`: it redirects.
 - **Child collections** (`[type.child]` in the schema, `[[child]]` in the data)
   for list-shaped data inside an object: tags, hours, FAQ entries, links. Never
   a comma-separated string.
@@ -96,9 +97,12 @@ text written out by hand.
 - `pages/llms.txt.liquid`: **every site gets one**. What the site is, its main
   pages, and its kinds of content, from `site` and the lists. Nothing about how
   it was built.
-- `pages/sitemap.xml.liquid` and `pages/robots.txt.liquid`: every page and
-  every templated item in the sitemap; robots allows all and names the sitemap
-  with `Sitemap: {{ site_url }}/sitemap.xml`.
+- `pages/sitemap.xml.liquid` and `pages/robots.txt.liquid`. The sitemap lists
+  every page and every templated item as an absolute URL without `.html`:
+  `<loc>{{ site_url }}/</loc>`, `<loc>{{ site_url }}/about</loc>`,
+  `<loc>{{ site_url }}/{{ post.path }}</loc>`, the same URLs the canonical
+  links use (§6). It leaves out the 404 page and every `noindex` page. Robots
+  allows all and names the sitemap with `Sitemap: {{ site_url }}/sitemap.xml`.
 - `pages/feed.xml.liquid`: whenever there is a dated list. The layout's `<head>`
   then carries
   `<link rel="alternate" type="application/rss+xml" title="<what it carries>" href="{{ site_url }}/feed.xml">`.
@@ -110,24 +114,33 @@ files resolve once it is. That is expected.
 
 Check: `test -f dist/llms.txt && test -f dist/sitemap.xml && test -f dist/robots.txt`;
 `grep -q 'rel="alternate"' dist/index.html` when `dist/feed.xml` exists;
+`grep -E '\.html</loc>|/404</loc>' dist/sitemap.xml` finds nothing;
 `xmllint --noout dist/sitemap.xml dist/feed.xml` where `xmllint` exists.
 
 ## 6. Head metadata, on every page
 
-In `layout/theme.liquid`, from the identity object and the page's `title:`:
+In `layout/theme.liquid`, from the identity object and the page's `title:` and
+`path:`:
 
 - `<title>` as `<page title> — <site name>`, or the site name alone on the home page
 - `<meta name="description">`
+- `<link rel="canonical" href="{{ site_url }}/{{ path }}">`: absolute, the
+  page's own URL, no `.html`. `og:url` carries the same URL.
 - `og:title`, `og:description`, `og:type`, `og:site_name`, `og:image` (from
   `site.og_image`, falling back to the design's main image) and `twitter:card`
   (`summary_large_image` with an image, else `summary`)
 - `<meta name="theme-color">`, ideally light and dark variants
 - a favicon: an inline SVG data URL built from the site name's initials needs
   no file
+- `{% if noindex %}<meta name="robots" content="noindex">{% endif %}`, for
+  utility pages: the 404 page, thank-you and confirmation pages, search results
 
-Pass `title:` from every page: `{% layout 'theme' title: "" %}` on the home
-page, a literal on section pages, `item.title` on templated pages. A missing
-argument fails the build.
+Pass `title:` and `path:` from every page: `{% layout 'theme' title: "", path: "" %}`
+on the home page, literals on section pages (`path: "about"`), `item.title`
+and `item.path` on templated pages. A missing argument fails the build. Never
+build the canonical from `page`: on a templated page that is the template's
+name, so every item would claim one URL. Utility pages add `noindex: true`,
+the one optional argument.
 
 ## 7. JSON-LD
 
@@ -195,12 +208,15 @@ test -f dist/llms.txt || echo "no llms.txt"
 test -f dist/sitemap.xml || echo "no sitemap.xml"
 test -f dist/robots.txt || echo "no robots.txt"
 [ -f dist/feed.xml ] && { grep -q 'rel="alternate"' dist/index.html || echo "feed not linked from layout"; }
+grep -Eq '\.html</loc>|/404</loc>' dist/sitemap.xml 2>/dev/null && echo "sitemap lists .html or 404 URLs"
+[ -f dist/404.html ] && { grep -q 'content="noindex"' dist/404.html || echo "404 page is not noindex"; }
 for f in $(find dist -name '*.html'); do
-  for needle in '<title>' 'name="description"' 'property="og:title"' 'lang="en"' 'id="main"'; do
+  for needle in '<title>' 'name="description"' 'rel="canonical"' 'property="og:title"' 'lang="en"' 'id="main"'; do
     grep -q "$needle" "$f" || echo "missing $needle: $f"
   done
   [ "$(grep -c '<h1' "$f")" = 1 ] || echo "h1 count is not 1: $f"
   grep -q 'href="#"' "$f" && echo "href=\"#\": $f"
+  grep -Eq 'href="/[^"]*\.html"' "$f" && echo ".html link: $f"
   grep -q 'onclick=' "$f" && echo "onclick: $f"
 done
 for f in dist/index.html dist/*/*.html; do

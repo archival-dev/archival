@@ -47,8 +47,8 @@ template = "post"
 ```
 
 `template = "post"` makes each object render through `pages/post.liquid` into
-`dist/post/<filename>.html`. Without it a type is data you loop over, and no
-per-object page is generated.
+`dist/post/<filename>.html`, served at `/post/<filename>`. Without it a type is
+data you loop over, and no per-object page is generated.
 
 ### Field types
 
@@ -107,7 +107,8 @@ body = "Open Tuesday to Sunday."
 ## Templates
 
 Every page in `pages/` becomes an HTML file: `pages/index.liquid` →
-`dist/index.html`. Files prefixed with `_` are partials and render no page.
+`dist/index.html`, and `pages/about.liquid` → `dist/about.html`, served at
+`/about`. Files prefixed with `_` are partials and render no page.
 
 ### Built-in variables
 
@@ -119,16 +120,21 @@ Every page in `pages/` becomes an HTML file: `pages/index.liquid` →
   to miss. `objects.<name>` always takes the name exactly as written, and is the
   way out when an inflection surprises you.
 - `site_url` — from `archival.toml`.
-- `page` — the name of the page being rendered.
+- `page` — the name of the page being rendered. On a `template` page it is the
+  template's name (`post`), the same for every object.
 
 On a `template` page the current object is bound to its type name, and carries
 `object_name`, `order`, and `path` (`post/my-first-post`).
 
 ```liquid
 {% for post in posts %}
-  <a href="/{{ post.path }}.html">{{ post.title }}</a>
+  <a href="/{{ post.path }}">{{ post.title }}</a>
 {% endfor %}
 ```
+
+Link without `.html`. Archival hosting and `archival run` both serve
+`/post/my-first-post` from `dist/post/my-first-post.html`, and a link that
+names the `.html` redirects.
 
 ### Layouts
 
@@ -136,7 +142,7 @@ On a `template` page the current object is bound to its type name, and carries
 receives them plus `page_content`, which holds the whole calling document.
 
 ```liquid
-{% layout 'theme' title: post.title %}
+{% layout 'theme' title: post.title, path: post.path %}
 <article><h1>{{ post.title }}</h1>{{ post.body }}</article>
 ```
 
@@ -148,6 +154,7 @@ receives them plus `page_content`, which holds the whole calling document.
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{ title }}</title>
+    <link rel="canonical" href="{{ site_url }}/{{ path }}" />
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>

@@ -259,7 +259,10 @@ impl BinaryCommand for Command {
                 .output()
                 .map_err(|e| UploadError::NoGit(e.to_string()))?;
             let remotes = String::from_utf8_lossy(&git_command.stdout);
-            infer_repo_id(&remotes, archival.site.manifest.site_url.as_deref())?
+            infer_repo_id(
+                &remotes,
+                archival.site.manifest.absolute_site_url().as_deref(),
+            )?
         };
         // Ok, this looks legit. Upload the file. Uploads usually live outside
         // of the site root, so read them from the OS, not the site's fs.
