@@ -140,7 +140,10 @@ impl CarrierSupervisor {
     fn start(site_root: PathBuf, database: PathBuf, options: CarrierOptions) -> Self {
         let state = Arc::new(RwLock::new(ProxyState::Starting));
         let sidecar = Arc::new(Mutex::new(None));
-        let seen = Arc::new(Mutex::new(SeenContents::default()));
+        let mut seen = SeenContents::default();
+        // Ahead of the dev server's watcher, which would otherwise see the worker's discovery reads as edits.
+        seen.prime(&site_root);
+        let seen = Arc::new(Mutex::new(seen));
         let (to_worker, inbox) = mpsc::channel();
         let worker = Worker {
             site_root,
