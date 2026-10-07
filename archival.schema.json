@@ -78,6 +78,11 @@
       "type": "string",
       "default": "js"
     },
+    "sitemap": {
+      "description": "whether a build with site_url set writes a default sitemap.xml listing every page it built, and a robots.txt naming it, wherever the site does not write its own. Set to false to turn both off",
+      "type": "boolean",
+      "default": true
+    },
     "metadata": {
       "description": "arbitrary string metadata about this site, used by the archival editor and other machine readers of this manifest",
       "type": "object",

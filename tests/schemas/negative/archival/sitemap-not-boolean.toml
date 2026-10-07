@@ -1,0 +1,2 @@
+# Only a boolean turns the default sitemap off.
+sitemap = "no"

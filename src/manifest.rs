@@ -39,15 +39,15 @@ pub enum InvalidManifestError {
     InvalidValidator(String, String),
     #[error("Manifest Missing Required Field: {0}")]
     MissingRequired(String),
-    #[error("Bad Path '{1}' for Field {0}")]
+    #[error("Bad Path {0} for Field {1}")]
     BadPath(Value, String),
     #[error("Cannot define a nested validator for type {0} ({1})")]
     InvalidNestedValidator(String, String),
     #[error("build_dir ({0}) overlaps {1} ({2}); a build must not read what it writes")]
     BuildDirOverlapsSource(String, String, String),
-    #[error("Invalid Manifest value '{1}' for field {0}.")]
+    #[error("Invalid Manifest value {0} for field {1}.")]
     InvalidField(Value, String),
-    #[error("Invalid Metadata value '{1}' for field {0}.")]
+    #[error("Invalid Metadata value {0} for field {1}.")]
     InvalidMetadata(Value, String),
     #[error("scripts_build_dir ({0}) must be a relative path inside build_dir")]
     ScriptsBuildDirOutsideBuildDir(String),
@@ -259,6 +259,9 @@ pub struct Manifest {
         type_def(type_of = "typedefs::MetadataTypeDef")
     )]
     pub metadata: Option<MetadataType>,
+    /// `false` when the manifest sets `sitemap = false`, which stops a build writing
+    /// a default sitemap.xml and robots.txt.
+    pub sitemap: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -284,6 +287,7 @@ pub enum ManifestField {
     UploadsUrl,
     EditorTypes,
     Metadata,
+    Sitemap,
 }
 
 impl ManifestField {
@@ -307,6 +311,7 @@ impl ManifestField {
             ManifestField::UploadsUrl => "uploads_url",
             ManifestField::EditorTypes => "editor_types",
             ManifestField::Metadata => "metadata",
+            ManifestField::Sitemap => "sitemap",
         }
     }
 }
@@ -447,6 +452,7 @@ impl Manifest {
             scripts_build_dir: PathBuf::from(SCRIPTS_BUILD_DIR_NAME),
             editor_types: EditorTypes::new(),
             metadata: None,
+            sitemap: true,
         }
     }
     fn is_default(&self, field: &ManifestField) -> bool {
@@ -490,6 +496,7 @@ impl Manifest {
                 str_value == self.root.join(SCRIPTS_DIR_NAME).to_string_lossy()
             }
             ManifestField::ScriptsBuildDir => str_value == SCRIPTS_BUILD_DIR_NAME,
+            ManifestField::Sitemap => self.sitemap,
             _ => str_value.is_empty(),
         }
     }
@@ -566,6 +573,11 @@ impl Manifest {
                 }
                 "editor_types" => manifest.parse_editor_types(value)?,
                 "metadata" => manifest.parse_metadata(value)?,
+                "sitemap" => {
+                    manifest.sitemap = value.as_bool().ok_or_else(|| {
+                        InvalidManifestError::InvalidField(value, "sitemap".to_string())
+                    })?
+                }
                 _ => {}
             }
         }
@@ -690,6 +702,7 @@ impl Manifest {
             ManifestField::ScriptsBuildDir => Some(Value::String(
                 self.scripts_build_dir.to_string_lossy().to_string(),
             )),
+            ManifestField::Sitemap => Some(Value::Boolean(self.sitemap)),
             ManifestField::Metadata => self.metadata.as_ref().map(|metadata| {
                 let mut map = toml::map::Map::new();
                 for (key, v) in metadata {
@@ -841,6 +854,7 @@ impl Manifest {
                 self.scripts_dir = (value != "false").then(|| PathBuf::from(value))
             }
             ManifestField::ScriptsBuildDir => self.scripts_build_dir = PathBuf::from(value),
+            ManifestField::Sitemap => self.sitemap = value != "false",
             ManifestField::Metadata => {
                 panic!("Metadata is not modifiable via events")
             }
@@ -882,6 +896,7 @@ impl Manifest {
             ManifestField::ScriptsBuildDir,
             ManifestField::EditorTypes,
             ManifestField::Metadata,
+            ManifestField::Sitemap,
         ]
     }
 
@@ -1067,6 +1082,22 @@ baz = "hello!"
         }
         let unset = Manifest::from_string(Path::new(""), String::new(), None)?;
         assert_eq!(unset.absolute_site_url(), None);
+        Ok(())
+    }
+
+    #[test]
+    fn sitemap_is_on_unless_set_to_false() -> Result<()> {
+        let read = |source: &str| Manifest::from_string(Path::new(""), source.to_string(), None);
+        assert!(read("")?.sitemap);
+        assert!(!read("sitemap = false\n")?.sitemap);
+        assert!(!read("")?.to_toml()?.contains("sitemap"));
+        assert!(read("sitemap = false\n")?
+            .to_toml()?
+            .contains("sitemap = false"));
+        assert_eq!(
+            read("sitemap = \"no\"\n").unwrap_err().to_string(),
+            "Invalid Manifest value \"no\" for field sitemap."
+        );
         Ok(())
     }
 

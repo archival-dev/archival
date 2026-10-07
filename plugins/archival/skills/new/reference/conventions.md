@@ -103,6 +103,8 @@ text written out by hand.
   `<loc>{{ site_url }}/{{ post.path }}</loc>`, the same URLs the canonical
   links use (§6). It leaves out the 404 page and every `noindex` page. Robots
   allows all and names the sitemap with `Sitemap: {{ site_url }}/sitemap.xml`.
+  Once `site_url` is set, a site without these pages gets a default of each,
+  but the default sitemap lists `noindex` pages too: write the page.
 - `pages/feed.xml.liquid`: whenever there is a dated list. The layout's `<head>`
   then carries
   `<link rel="alternate" type="application/rss+xml" title="<what it carries>" href="{{ site_url }}/feed.xml">`.
