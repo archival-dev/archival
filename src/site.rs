@@ -167,7 +167,7 @@ fn hash_source(source: &str) -> u64 {
 }
 
 impl WritePlan {
-    pub(crate) fn take_failures(&mut self) -> Vec<ScriptFailure> {
+    pub fn take_failures(&mut self) -> Vec<ScriptFailure> {
         std::mem::take(&mut self.failures)
     }
 
