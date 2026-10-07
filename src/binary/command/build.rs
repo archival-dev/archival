@@ -74,6 +74,16 @@ impl BinaryCommand for Command {
         let upload_prefix = args.get_one::<String>("upload-prefix").map(|s| s.as_str());
         let mut site = Site::load(&fs, upload_prefix)?;
         println!("Building site: {}", site);
+        if let (Some(written), Some(absolute)) = (
+            site.manifest.site_url.as_deref(),
+            site.manifest.absolute_site_url(),
+        ) {
+            if written != absolute {
+                eprintln!(
+                    "warning: site_url {written:?} has no scheme, so pages render it as {absolute:?}"
+                );
+            }
+        }
         if let Some(build_dir_arg) = args.get_one::<PathBuf>("build-dir") {
             let cwd = std::env::current_dir().unwrap();
             site.manifest.build_dir =

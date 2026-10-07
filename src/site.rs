@@ -983,12 +983,11 @@ impl Site {
             layout_dir,
             pages_dir,
             build_dir,
-            site_url,
             ..
         } = &self.manifest;
 
         let globals = RenderGlobals {
-            site_url: site_url.as_ref().map(|v| v.into()).unwrap_or_default(),
+            site_url: self.manifest.absolute_site_url().unwrap_or_default(),
         };
 
         let mut plan = WritePlan::default();
@@ -1344,7 +1343,7 @@ fn hash_file(file: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::OBJECT_DEFINITION_FILE_NAME;
+    use crate::constants::{MANIFEST_FILE_NAME, OBJECT_DEFINITION_FILE_NAME};
     use crate::fields::ObjectValues;
     use crate::file_system_memory::MemoryFileSystem;
     use crate::util::path_to_slash;
@@ -1701,6 +1700,36 @@ mod tests {
             "a deleted page's output removed the static file built to its path"
         );
         assert_eq!(build(&mut fs)?.as_deref(), Some("static"));
+        Ok(())
+    }
+
+    #[test]
+    fn templates_read_a_site_url_without_a_scheme_as_https() -> Result<()> {
+        let mut fs = MemoryFileSystem::default();
+        fs.write_str(
+            Path::new(MANIFEST_FILE_NAME),
+            "site_url = \"example.com\"\n".to_string(),
+        )?;
+        fs.write_str(
+            Path::new(OBJECT_DEFINITION_FILE_NAME),
+            "[post]\nname = \"string\"\n".to_string(),
+        )?;
+        fs.write_str(
+            Path::new("objects/post/a-post.toml"),
+            "name = \"A Post\"\n".to_string(),
+        )?;
+        fs.write_str(
+            Path::new("pages/index.liquid"),
+            "{{ site_url }}/about\n".to_string(),
+        )?;
+        let site = Site::load(&fs, Some("test"))?;
+        site.build(&mut fs, BuildOptions::default())?;
+        let rendered = fs.read_to_string(site.manifest.build_dir.join("index.html"))?;
+        assert_eq!(
+            rendered.as_deref().map(str::trim),
+            Some("https://example.com/about")
+        );
+        assert_eq!(site.manifest.site_url.as_deref(), Some("example.com"));
         Ok(())
     }
 

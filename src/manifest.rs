@@ -3,6 +3,7 @@ use ordermap::OrderMap;
 use regex::Regex;
 use serde::{de::Visitor, Deserialize, Deserializer, Serialize, Serializer};
 use std::{
+    borrow::Cow,
     fmt::{self, Display},
     hash::Hash,
     ops::Deref,
@@ -616,6 +617,20 @@ impl Manifest {
         }
     }
 
+    /// `site_url` as templates read it. A value written without a scheme
+    /// (`example.com`) gets `https://`, so the canonical, feed and sitemap URLs a
+    /// site builds from it are absolute.
+    pub fn absolute_site_url(&self) -> Option<Cow<'_, str>> {
+        let site_url = self.site_url.as_deref()?;
+        if site_url.is_empty() || has_scheme(site_url) {
+            return Some(Cow::Borrowed(site_url));
+        }
+        Some(Cow::Owned(format!(
+            "https://{}",
+            site_url.trim_start_matches('/')
+        )))
+    }
+
     pub fn from_file(
         manifest_path: &Path,
         fs: &impl FileSystemAPI,
@@ -898,6 +913,17 @@ impl Manifest {
     }
 }
 
+/// Whether `url` opens with an RFC 3986 scheme and `//`, which `localhost:1024`
+/// does not.
+fn has_scheme(url: &str) -> bool {
+    url.split_once("://").is_some_and(|(scheme, _)| {
+        scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    })
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -1009,6 +1035,39 @@ baz = "hello!"
     #[test]
     fn the_default_layout_keeps_build_dir_separate() {
         assert!(Manifest::from_string(Path::new(""), String::new(), Some("test")).is_ok());
+    }
+
+    #[test]
+    fn a_site_url_without_a_scheme_is_read_as_https() -> Result<()> {
+        let absolute = |site_url: &str| -> Result<String> {
+            let manifest =
+                Manifest::from_string(Path::new(""), format!("site_url = {site_url:?}\n"), None)?;
+            Ok(manifest
+                .absolute_site_url()
+                .unwrap_or_default()
+                .into_owned())
+        };
+        for (written, read) in [
+            ("example.com", "https://example.com"),
+            ("//example.com", "https://example.com"),
+            ("localhost:1024", "https://localhost:1024"),
+            (
+                "example.com/?next=https://example.org",
+                "https://example.com/?next=https://example.org",
+            ),
+            ("https://example.com", "https://example.com"),
+            (
+                "https://example.com/cookbook",
+                "https://example.com/cookbook",
+            ),
+            ("http://localhost:1024", "http://localhost:1024"),
+            ("", ""),
+        ] {
+            assert_eq!(absolute(written)?, read, "site_url = {written:?}");
+        }
+        let unset = Manifest::from_string(Path::new(""), String::new(), None)?;
+        assert_eq!(unset.absolute_site_url(), None);
+        Ok(())
     }
 
     #[test]
