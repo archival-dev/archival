@@ -37,9 +37,9 @@ impl NativeFileSystem {
         // joining it onto root would still discard everything but root's
         // prefix.
         if rel_path.has_root() {
-            // If the path is already inside root, use it as-is (e.g. an
-            // absolute build-dir passed via CLI). Otherwise treat it as a
-            // root-relative absolute path (e.g. "/pages/foo.liquid").
+            // If the path is already inside root, use it as-is. Otherwise
+            // treat it as a root-relative absolute path (e.g.
+            // "/pages/foo.liquid").
             if rel_path.starts_with(&self.root) {
                 return rel_path.to_path_buf();
             }

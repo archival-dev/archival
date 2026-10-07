@@ -578,7 +578,7 @@ impl Manifest {
     /// inside the other breaks that: a static sync would copy the build into itself, and
     /// `NativeFileSystem::walk_dir` is lazy, so it observes those writes inside the same
     /// walk that is producing them.
-    fn validate_build_dir(&self) -> Result<()> {
+    pub(crate) fn validate_build_dir(&self) -> Result<()> {
         for (name, dir) in [
             ("objects", &self.objects_dir),
             ("pages", &self.pages_dir),
