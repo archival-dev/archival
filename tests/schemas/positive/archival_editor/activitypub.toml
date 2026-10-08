@@ -32,6 +32,11 @@ type = "Note"
 content = "caption"
 image = "photo"
 
+[activitypub.objects.photo.attachment]
+children = "media"
+file = "file"
+name = "alt"
+
 [[post.views]]
 name = "default"
 primary = "title"

@@ -1,0 +1,6 @@
+# An attachment names the file each child publishes; a list alone attaches nothing.
+[activitypub.objects.post]
+content = "body"
+
+[activitypub.objects.post.attachment]
+children = "media"

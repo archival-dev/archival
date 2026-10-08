@@ -221,6 +221,32 @@
           "description": "the image field attached to each post",
           "type": "string",
           "minLength": 1
+        },
+        "attachment": {
+          "$ref": "#/definitions/activityPubAttachmentConfig"
+        }
+      }
+    },
+    "activityPubAttachmentConfig": {
+      "description": "a child list whose instances are each attached to the post, in order and after `image`, which servers such as Mastodon show as the post's photos, videos and audio",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["children", "file"],
+      "properties": {
+        "children": {
+          "description": "the child list of the mapped object whose instances are the attachments",
+          "type": "string",
+          "minLength": 1
+        },
+        "file": {
+          "description": "the image, video or audio field of each child published as its attachment, or a oneof field whose image, video and audio options are",
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "description": "the string, markdown or enum field of each child published as its attachment's alt text",
+          "type": "string",
+          "minLength": 1
         }
       }
     }
