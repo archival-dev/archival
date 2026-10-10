@@ -404,6 +404,42 @@ const makeActivityPub = (name) => {
  * pushed state. A carrier names its version in its package.json, as
  * `"archival": { "carrier": 2 }`.
  */
+/**
+ * A local run has received no mentions, so it reads as a site none has
+ * reached, as a deployed carrier's facade does with no site behind it.
+ */
+const makeWebmentions = (name) => {
+  const pagePath = (page) => {
+    const path = page && typeof page === "object" ? page.path : page;
+    if (typeof path !== "string") {
+      throw new Error(name + " needs a page: one of your objects, or a path");
+    }
+    return path;
+  };
+  const noCounts = () => ({
+    replies: 0,
+    likes: 0,
+    reposts: 0,
+    bookmarks: 0,
+    mentions: 0,
+  });
+  return Object.freeze({
+    counts: async (pages) => {
+      if (!Array.isArray(pages)) {
+        throw new Error(name + ".counts takes a list of pages");
+      }
+      return pages.map((page) => {
+        pagePath(page);
+        return noCounts();
+      });
+    },
+    list: async (page) => {
+      pagePath(page);
+      return { items: [], total: 0, next: null };
+    },
+  });
+};
+
 const CARRIER_CALLS = new Map([
   [
     1,
@@ -434,6 +470,7 @@ const CARRIER_CALLS = new Map([
           email: makeEmail("site.email"),
           sql: makeSql("site.sql", current.database),
           activitypub: makeActivityPub("site.activitypub"),
+          webmentions: makeWebmentions("site.webmentions"),
         }),
       ),
   ],

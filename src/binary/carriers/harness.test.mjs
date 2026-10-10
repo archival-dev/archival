@@ -182,6 +182,19 @@ test("each carrier API version is called its own way", async () => {
     site.activitypub.setLocalLikes("artist/a", -1),
     /site\.activitypub\.setLocalLikes needs a whole number of likes/,
   );
+  assert.deepEqual(await site.webmentions.counts([{ path: "artist/a" }, ""]), [
+    { replies: 0, likes: 0, reposts: 0, bookmarks: 0, mentions: 0 },
+    { replies: 0, likes: 0, reposts: 0, bookmarks: 0, mentions: 0 },
+  ]);
+  assert.deepEqual(await site.webmentions.list("artist/a", { kind: "reply" }), {
+    items: [],
+    total: 0,
+    next: null,
+  });
+  await assert.rejects(
+    site.webmentions.list({ name: "no path" }),
+    /site\.webmentions needs a page/,
+  );
 });
 
 test("site.sql keeps what it is given in its database file", sqlite, async () => {

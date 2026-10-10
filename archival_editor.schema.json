@@ -14,6 +14,9 @@
     },
     "activitypub": {
       "$ref": "#/definitions/activityPubConfig"
+    },
+    "webmention": {
+      "$ref": "#/definitions/webmentionConfig"
     }
   },
   "additionalProperties": {
@@ -245,6 +248,89 @@
         },
         "name": {
           "description": "the string, markdown or enum field of each child published as its attachment's alt text",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "webmentionConfig": {
+      "description": "receives Webmentions of the site's pages, and sends them from the objects mapped under `objects`. The section alone, with nothing under it, receives without sending. Past `domain` and the author's `object`, every value names a field of the object it reads from. Reserved: an object of this name cannot be configured here.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "domain": {
+          "description": "the host every mention is sent from, which receivers show as the mention's address. Must be one of the site's own domains, without a scheme or port. Defaults to the site's primary domain, which is the one it was created with rather than the one added most recently.",
+          "type": "string",
+          "maxLength": 253,
+          "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$"
+        },
+        "author": {
+          "$ref": "#/definitions/webmentionAuthorConfig"
+        },
+        "objects": {
+          "description": "the list objects that send mentions, keyed by object name from archival_objects.toml. Each needs a template, so its instances have pages to send from.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/webmentionObjectConfig"
+          }
+        }
+      }
+    },
+    "webmentionAuthorConfig": {
+      "description": "the author a receiver shows beside the site's mentions, read from a root object. Without it the site is named by its domain.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["object"],
+      "properties": {
+        "object": {
+          "description": "the root object the author is read from: a single object from archival_objects.toml, not a list",
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "description": "the string, markdown or enum field shown as the author's name",
+          "type": "string",
+          "minLength": 1
+        },
+        "photo": {
+          "description": "the image field shown as the author's photo",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "webmentionObjectConfig": {
+      "description": "how each instance of a list object sends mentions. At least one of `content`, `in_reply_to` or `like_of` is needed, since they are what name the pages a mention reaches.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "when": {
+          "description": "the boolean field gating sending: only instances where it is true send, and one already sent is retracted when it turns false",
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "description": "the string, markdown or enum field sent as the page's title",
+          "type": "string",
+          "minLength": 1
+        },
+        "content": {
+          "description": "the string, markdown or enum field sent as the page's body; every page it links to is sent a mention",
+          "type": "string",
+          "minLength": 1
+        },
+        "published": {
+          "description": "the date field sent as when the page was published",
+          "type": "string",
+          "minLength": 1
+        },
+        "in_reply_to": {
+          "description": "the string field holding the address of the page this one replies to",
+          "type": "string",
+          "minLength": 1
+        },
+        "like_of": {
+          "description": "the string field holding the address of the page this one likes",
           "type": "string",
           "minLength": 1
         }
