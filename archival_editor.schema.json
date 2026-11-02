@@ -13,7 +13,11 @@
       }
     },
     "activitypub": {
-      "$ref": "#/definitions/activityPubConfig"
+      "description": "the accounts the site federates over ActivityPub, each a `[[activitypub]]` table. Reserved: an object of this name cannot be configured here.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/activityPubConfig"
+      }
     },
     "webmention": {
       "$ref": "#/definitions/webmentionConfig"
@@ -85,24 +89,28 @@
       }
     },
     "activityPubConfig": {
-      "description": "publishes the site over ActivityPub, so it can be followed from Mastodon and other fediverse servers. Past `username`, `domain`, `follow`, the actor's `object` and each object's `type`, every value names a field of the object it reads from. Reserved: an object of this name cannot be configured here.",
+      "description": "one of the site's ActivityPub accounts, which can be followed from Mastodon and other fediverse servers. Past `username`, `domain`, `email`, `follow`, the actor's `object` and each object's `type`, every value names a field of the object it reads from. A list object is published by at most one account.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["objects"],
       "properties": {
         "username": {
-          "description": "the local part of the site's handle, `@<username>@<domain>`: letters, numbers and underscores, with dots and dashes allowed between them, up to 64 characters",
+          "description": "the local part of the account's handle, `@<username>@<domain>`: letters, numbers and underscores, with dots and dashes allowed between them, up to 64 characters. Required when the site has more than one account; defaults to the first label of the domain. `inbox` and `nodeinfo` are reserved.",
           "type": "string",
           "pattern": "^[A-Za-z0-9_](?:[A-Za-z0-9_.-]{0,62}[A-Za-z0-9_])?$"
         },
         "domain": {
-          "description": "the domain half of the site's handle, `@<username>@<domain>`, and the host every post's address is written against. Must be one of the site's own domains, without a scheme or port. Defaults to the site's primary domain, which is the one it was created with rather than the one added most recently. Changing it once the site has federated publishes it as a new account, which its followers are not following.",
+          "description": "the domain half of the account's handle, `@<username>@<domain>`, and the host every post's address is written against. Must be one of the site's own domains, without a scheme or port. Defaults to the site's primary domain, which is the one it was created with rather than the one added most recently. Changing it once the account has federated publishes it as a new account, which its followers are not following.",
           "type": "string",
           "maxLength": 253,
           "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$"
         },
+        "email": {
+          "description": "the email of the collaborator who may act as the account (follow, like, boost and reply from it), as they were invited to the site. Left out, any collaborator may.",
+          "type": "string",
+          "pattern": "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$"
+        },
         "follow": {
-          "description": "accounts the site follows, each a handle like `@user@example.com` or an https actor address. Following is how a site opts in to a bridge such as Bridgy Fed (`@bsky.brid.gy@bsky.brid.gy`). An account taken off the list is unfollowed on the next deploy.",
+          "description": "accounts this one follows, each a handle like `@user@example.com` or an https actor address. Following is how a site opts in to a bridge such as Bridgy Fed (`@bsky.brid.gy@bsky.brid.gy`). An account taken off the list is unfollowed on the next deploy.",
           "type": "array",
           "maxItems": 20,
           "items": {
@@ -114,7 +122,7 @@
           "$ref": "#/definitions/activityPubActorConfig"
         },
         "objects": {
-          "description": "the lists published, keyed by the name of a list object from archival_objects.toml. Every instance of each list is published as its own post.",
+          "description": "the lists this account publishes, keyed by the name of a list object from archival_objects.toml. Every instance of each list is published as its own post.",
           "type": "object",
           "minProperties": 1,
           "additionalProperties": {
@@ -124,7 +132,7 @@
       }
     },
     "activityPubActorConfig": {
-      "description": "the profile other servers show for the site, read from a root object",
+      "description": "the profile other servers show for the account, read from a root object",
       "type": "object",
       "additionalProperties": false,
       "required": ["object"],

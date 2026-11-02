@@ -576,6 +576,7 @@ const makeActivityPub = (name) => {
   };
   return Object.freeze({
     account: async () => null,
+    accounts: async () => [],
     followers: async () => ({ items: [], total: 0, next: null }),
     counts: async (posts) => {
       if (!Array.isArray(posts)) {

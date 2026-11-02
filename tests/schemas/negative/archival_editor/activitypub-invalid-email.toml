@@ -1,0 +1,4 @@
+# `email` names the collaborator who may act as the account.
+[[activitypub]]
+username = "jesse"
+email = "not an address"

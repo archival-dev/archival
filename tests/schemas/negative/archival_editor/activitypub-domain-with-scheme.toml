@@ -1,6 +1,6 @@
 # The handle is built from a bare hostname, so a URL here would federate the
 # site as `@blog@https://example.com`.
-[activitypub]
+[[activitypub]]
 domain = "https://example.com/"
 
 [activitypub.objects.post]

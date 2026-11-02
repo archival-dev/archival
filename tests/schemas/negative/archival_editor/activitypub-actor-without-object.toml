@@ -1,5 +1,6 @@
 # ActivityPubActorConfig::object is not an Option: a profile has to be read from
 # some object.
+[[activitypub]]
 [activitypub.actor]
 name = "title"
 

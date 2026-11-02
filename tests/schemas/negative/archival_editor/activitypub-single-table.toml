@@ -1,0 +1,6 @@
+# `activitypub` is a list of accounts, never one table.
+[activitypub]
+username = "blog"
+
+[activitypub.objects.post]
+content = "body"

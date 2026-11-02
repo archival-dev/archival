@@ -1,0 +1,8 @@
+# An account with nothing to publish is still an account: it has a profile,
+# can follow, and a person can act from it.
+[[activitypub]]
+username = "blog"
+
+[activitypub.actor]
+object = "site"
+name = "title"

@@ -1,0 +1,11 @@
+# Several accounts: one publishes the posts, one is a person who follows.
+[[activitypub]]
+username = "news"
+
+[activitypub.objects.post]
+content = "body"
+
+[[activitypub]]
+username = "jesse"
+email = "jesse@example.com"
+follow = ["@Rubenlinde@fosstodon.org"]

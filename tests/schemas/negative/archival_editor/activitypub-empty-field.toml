@@ -1,4 +1,5 @@
 # Every mapping has to name a field; an empty name is rejected when the site
 # publishes.
+[[activitypub]]
 [activitypub.objects.post]
 content = ""

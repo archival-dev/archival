@@ -1,6 +1,6 @@
 # `activitypub` is reserved at the top level, alongside `shortcuts` and the
 # object names.
-[activitypub]
+[[activitypub]]
 username = "blog"
 domain = "example.com"
 follow = ["@bsky.brid.gy@bsky.brid.gy", "https://mastodon.social/users/Gargron"]
