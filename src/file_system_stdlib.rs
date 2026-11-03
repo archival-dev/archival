@@ -51,6 +51,14 @@ impl NativeFileSystem {
     }
 }
 
+fn none_if_missing<T>(read: std::io::Result<T>) -> Result<Option<T>> {
+    match read {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
 impl FileSystemAPI for NativeFileSystem {
     /// A real directory cannot be frozen, and this type is only a path to one.
     fn snapshot(&self) -> Option<Self> {
@@ -72,10 +80,10 @@ impl FileSystemAPI for NativeFileSystem {
         Ok(fs::create_dir_all(self.get_path(path))?)
     }
     fn read(&self, path: impl AsRef<Path>) -> Result<Option<Vec<u8>>> {
-        Ok(Some(fs::read(self.get_path(path))?))
+        none_if_missing(fs::read(self.get_path(path)))
     }
     fn read_to_string(&self, path: impl AsRef<Path>) -> Result<Option<String>> {
-        Ok(Some(fs::read_to_string(self.get_path(path))?))
+        none_if_missing(fs::read_to_string(self.get_path(path)))
     }
     fn delete(&mut self, path: impl AsRef<Path>) -> Result<()> {
         if self.is_dir(&path)? {
