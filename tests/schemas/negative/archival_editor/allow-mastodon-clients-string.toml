@@ -1,0 +1,2 @@
+# The flag is a boolean; a string is not coerced.
+allow_mastodon_clients = "yes"

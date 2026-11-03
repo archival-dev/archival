@@ -1,0 +1,5 @@
+# Fediverse apps sign in as the site's activitypub accounts.
+allow_mastodon_clients = true
+
+[[activitypub]]
+username = "news"
