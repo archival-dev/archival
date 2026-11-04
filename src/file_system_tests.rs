@@ -29,6 +29,16 @@ mod tests {
         Ok(())
     }
 
+    pub fn missing_files_read_as_none(mut fs: impl FileSystemAPI) -> Result<()> {
+        let missing = Path::new("some/deep/path/absent.txt");
+        assert!(fs.read(missing)?.is_none());
+        assert!(fs.read_to_string(missing)?.is_none());
+        fs.create_dir_all(Path::new("some/deep/path"))?;
+        assert!(fs.read(missing)?.is_none());
+        assert!(fs.read_to_string(missing)?.is_none());
+        Ok(())
+    }
+
     pub fn absolute_paths(mut fs: impl FileSystemAPI) -> Result<()> {
         // Write via relative path, read back via absolute path (leading /)
         let rel = Path::new("dir/file.txt");
@@ -129,6 +139,7 @@ mod memory {
     gen_test!(write_and_read_files, get_fs());
     gen_test!(unzip_to_fs, get_fs());
     gen_test!(absolute_paths, get_fs());
+    gen_test!(missing_files_read_as_none, get_fs());
 }
 
 #[cfg(feature = "stdlib-fs")]
@@ -153,4 +164,5 @@ mod stdlib {
     gen_test!(write_and_read_files, get_fs());
     gen_test!(unzip_to_fs, get_fs());
     gen_test!(absolute_paths, get_fs());
+    gen_test!(missing_files_read_as_none, get_fs());
 }

@@ -87,6 +87,8 @@ pub use fields::{
 };
 pub use file_system::{unpack_zip, FileSystemAPI};
 pub use file_system_memory::MemoryFileSystem;
+#[cfg(feature = "stdlib-fs")]
+pub use file_system_stdlib::NativeFileSystem;
 #[cfg(feature = "json-schema")]
 pub use json_schema::{ObjectSchema, ObjectSchemaOptions};
 pub use object::{ObjectMap, RenderedObject, RenderedObjectMap, ValuePath};

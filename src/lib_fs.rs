@@ -44,17 +44,7 @@ impl<F: FileSystemAPI + Clone + Debug> Archival<F> {
         })
     }
     pub fn fs_read_bytes(&self, path: impl AsRef<Path>) -> Result<Option<Vec<u8>>> {
-        self.fs_mutex.with_fs(|fs| match fs.read(path) {
-            // NativeFileSystem reports a missing file as an io error rather than None.
-            Err(error)
-                if error
-                    .downcast_ref::<std::io::Error>()
-                    .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
-            {
-                Ok(None)
-            }
-            read => read,
-        })
+        self.fs_mutex.with_fs(|fs| fs.read(path))
     }
     pub fn fs_write_file(&self, path: impl AsRef<Path>, contents: String) -> Result<()> {
         self.fs_mutex.with_fs(|fs| {
