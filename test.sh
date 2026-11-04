@@ -37,6 +37,8 @@ else
     RUST_LOG=debug cargo test --no-default-features --features=uniffi $EXTRA_ARGS
     echo "---- wasm32: the editor's features, plus compile-scripts"
     cargo check --target wasm32-unknown-unknown --no-default-features --features=json-schema,proto,compile-scripts
+    echo "---- features: [no default], stdlib-fs (a host editing a site on disk)"
+    cargo check --no-default-features --features=stdlib-fs,json-schema,proto,compile-scripts
     if command -v node >/dev/null 2>&1; then
         echo "---- carrier harness"
         node --test src/binary/carriers/harness.test.mjs
