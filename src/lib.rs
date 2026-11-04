@@ -85,6 +85,8 @@ pub use fields::{
     file::RenderedFile, FieldConfig, FieldType, FieldValue, RenderedFieldValue,
     RenderedObjectValues,
 };
+#[cfg(feature = "stdlib-fs")]
+pub use file_system::WatchableFileSystemAPI;
 pub use file_system::{unpack_zip, FileSystemAPI};
 pub use file_system_memory::MemoryFileSystem;
 #[cfg(feature = "stdlib-fs")]

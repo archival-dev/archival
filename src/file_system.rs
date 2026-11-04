@@ -61,7 +61,7 @@ pub trait FileSystemAPI: Send + Sync + Default {
 //     }
 // }
 
-#[cfg(feature = "binary")]
+#[cfg(feature = "stdlib-fs")]
 pub trait WatchableFileSystemAPI {
     fn watch(
         &self,
