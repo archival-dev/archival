@@ -1,0 +1,3 @@
+[atproto.objects.post]
+type = "Article"
+content = "body"

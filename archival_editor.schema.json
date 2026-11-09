@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://archival.dev/schemas/archival_editor.schema.json",
   "title": "Archival editor configuration",
-  "description": "Per-object configuration for the archival editor, read from archival_editor.toml at the site root. Keys are object names from archival_objects.toml, except `shortcuts`, `activitypub`, `webmention` and `allow_mastodon_clients`, which are reserved.",
+  "description": "Per-object configuration for the archival editor, read from archival_editor.toml at the site root. Keys are object names from archival_objects.toml, except `shortcuts`, `activitypub`, `webmention`, `atproto` and `allow_mastodon_clients`, which are reserved.",
   "type": "object",
   "properties": {
     "shortcuts": {
@@ -21,6 +21,9 @@
     },
     "webmention": {
       "$ref": "#/definitions/webmentionConfig"
+    },
+    "atproto": {
+      "$ref": "#/definitions/atprotoConfig"
     },
     "allow_mastodon_clients": {
       "description": "when true, the site's domains answer the Mastodon client API and its OAuth sign-in for the site's `activitypub` accounts, so fediverse apps can sign in as them. Reserved: an object of this name cannot be configured here.",
@@ -343,6 +346,200 @@
         },
         "like_of": {
           "description": "the string field holding the address of the page this one likes",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "atprotoConfig": {
+      "description": "publishes the site as an ATProto account, which can be followed from Bluesky and other ATProto apps. The site hosts the account itself: its handle is the domain and its DID is `did:web:<domain>`. Past `domain`, `follow`, the `object` of `actor` and `publication`, and each object's `type`, every value names a field of the object it reads from. Reserved: an object of this name cannot be configured here.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "domain": {
+          "description": "the account's handle and, as `did:web:<domain>`, its identity. Must be one of the site's own domains, without a scheme or port. Defaults to the site's primary domain, which is the one it was created with rather than the one added most recently. Changing it once the account has published creates a new, empty account: followers, likes and replies stay with the old one.",
+          "type": "string",
+          "maxLength": 253,
+          "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$"
+        },
+        "follow": {
+          "description": "accounts this one follows, each a handle like `alice.example.com` or a DID. An account taken off the list is unfollowed on the next deploy.",
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "pattern": "^(?:@?[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+|did:(?:plc|web):[A-Za-z0-9._:%-]+)$"
+          }
+        },
+        "actor": {
+          "$ref": "#/definitions/atprotoActorConfig"
+        },
+        "publication": {
+          "$ref": "#/definitions/atprotoPublicationConfig"
+        },
+        "objects": {
+          "description": "the lists this account publishes, keyed by the name of a list object from archival_objects.toml. Every instance of each list is published as its own record.",
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/definitions/atprotoObjectConfig"
+          }
+        }
+      }
+    },
+    "atprotoActorConfig": {
+      "description": "the account's profile, read from a root object",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["object"],
+      "properties": {
+        "object": {
+          "description": "the root object the profile is read from: a single object from archival_objects.toml, not a list",
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "description": "the string, markdown or enum field shown as the profile's display name",
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "description": "the string, markdown or enum field shown as the profile's description",
+          "type": "string",
+          "minLength": 1
+        },
+        "icon": {
+          "description": "the image field shown as the profile's avatar",
+          "type": "string",
+          "minLength": 1
+        },
+        "image": {
+          "description": "the image field shown as the profile's banner",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "atprotoPublicationConfig": {
+      "description": "the `site.standard.publication` every `Document` belongs to, read from a root object. Required when any object's `type` is `Document`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["object"],
+      "properties": {
+        "object": {
+          "description": "the root object the publication is read from: a single object from archival_objects.toml, not a list",
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "description": "the string, markdown or enum field published as the publication's name",
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "description": "the string, markdown or enum field published as the publication's description",
+          "type": "string",
+          "minLength": 1
+        },
+        "icon": {
+          "description": "the image field published as the publication's icon",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "atprotoObjectConfig": {
+      "description": "how each instance of a list object is published",
+      "type": "object",
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "properties": {
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": ["content"]
+        },
+        {
+          "properties": {
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": ["name"]
+        }
+      ],
+      "properties": {
+        "type": {
+          "description": "what each instance is published as: `Post` is an `app.bsky.feed.post` carrying the content itself, and `Document` is a `site.standard.document` announced by a post linking to its page",
+          "type": "string",
+          "enum": ["Post", "Document"],
+          "default": "Post"
+        },
+        "when": {
+          "description": "the boolean field gating publication: only instances where it is true are published, and one already published is deleted when it turns false",
+          "type": "string",
+          "minLength": 1
+        },
+        "featured": {
+          "description": "the boolean field featuring an instance: the newest published instance where it is true, across every mapped list, is the profile's pinned post",
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "description": "the string, markdown or enum field published as a document's title and as the title of the link card on its post",
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "description": "the string, markdown or enum field published as a document's description and as the description of the link card on its post",
+          "type": "string",
+          "minLength": 1
+        },
+        "content": {
+          "description": "the string, markdown or enum field published as a post's text, which is cut at 300 characters with a link to the page, or as a document's text",
+          "type": "string",
+          "minLength": 1
+        },
+        "published": {
+          "description": "the date field published as when each record was created",
+          "type": "string",
+          "minLength": 1
+        },
+        "updated": {
+          "description": "the date field published as when a document was last updated",
+          "type": "string",
+          "minLength": 1
+        },
+        "image": {
+          "description": "the image field embedded in a post, or published as a document's cover image and its link card's thumbnail",
+          "type": "string",
+          "minLength": 1
+        },
+        "attachment": {
+          "$ref": "#/definitions/atprotoAttachmentConfig"
+        }
+      }
+    },
+    "atprotoAttachmentConfig": {
+      "description": "a child list whose image instances are embedded in the post, in order and after `image`, up to four images in all",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["children", "file"],
+      "properties": {
+        "children": {
+          "description": "the child list of the mapped object whose instances are the images",
+          "type": "string",
+          "minLength": 1
+        },
+        "file": {
+          "description": "the image field of each child embedded in the post",
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "description": "the string, markdown or enum field of each child published as its image's alt text",
           "type": "string",
           "minLength": 1
         }

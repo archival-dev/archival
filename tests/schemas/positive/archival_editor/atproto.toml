@@ -1,0 +1,36 @@
+# The site is its own ATProto account: the domain is its handle and its DID.
+[atproto]
+domain = "example.com"
+follow = ["alice.example.com", "did:plc:ewvi7nxzyoun6zhxrhs64oiz"]
+
+[atproto.actor]
+object = "site"
+name = "title"
+summary = "bio"
+icon = "logo"
+image = "cover"
+
+[atproto.publication]
+object = "site"
+name = "title"
+summary = "tagline"
+icon = "logo"
+
+[atproto.objects.post]
+type = "Document"
+when = "live"
+featured = "pinned"
+name = "title"
+summary = "excerpt"
+content = "body"
+published = "date"
+updated = "updated"
+image = "cover"
+
+[atproto.objects.note]
+content = "text"
+
+[atproto.objects.note.attachment]
+children = "media"
+file = "file"
+name = "alt"

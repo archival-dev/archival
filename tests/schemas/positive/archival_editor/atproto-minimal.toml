@@ -1,0 +1,3 @@
+# One mapped list is enough: the domain defaults to the site's primary one.
+[atproto.objects.note]
+content = "text"

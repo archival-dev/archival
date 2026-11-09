@@ -1,0 +1,3 @@
+# `atproto` is one account, never a list of them.
+[[atproto]]
+domain = "example.com"
