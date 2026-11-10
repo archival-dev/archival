@@ -642,6 +642,40 @@ const makeWebmentions = (name) => {
   });
 };
 
+/**
+ * A local run has no ATProto account, so it reads as a site without one, as
+ * a deployed carrier's facade does with no site behind it.
+ */
+const makeATProto = (name) => {
+  const postPath = (post) => {
+    const path = post && typeof post === "object" ? post.path : post;
+    if (typeof path !== "string" || !path) {
+      throw new Error(name + " needs a post: one of your objects, or its path");
+    }
+    return path;
+  };
+  const emptyPage = async (post) => {
+    postPath(post);
+    return { items: [], total: 0, next: null };
+  };
+  return Object.freeze({
+    account: async () => null,
+    followers: async () => ({ items: [], total: 0, next: null }),
+    counts: async (posts) => {
+      if (!Array.isArray(posts)) {
+        throw new Error(name + ".counts takes a list of posts");
+      }
+      return posts.map((post) => {
+        postPath(post);
+        return { likes: 0, reposts: 0, replies: 0 };
+      });
+    },
+    likes: emptyPage,
+    reposts: emptyPage,
+    replies: emptyPage,
+  });
+};
+
 const CARRIER_CALLS = new Map([
   [
     1,
@@ -673,6 +707,7 @@ const CARRIER_CALLS = new Map([
           sql: makeSql("site.sql", current.database),
           activitypub: makeActivityPub("site.activitypub"),
           webmentions: makeWebmentions("site.webmentions"),
+          atproto: makeATProto("site.atproto"),
         }),
       ),
   ],
