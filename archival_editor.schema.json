@@ -315,7 +315,7 @@
       }
     },
     "webmentionObjectConfig": {
-      "description": "how each instance of a list object sends mentions. At least one of `content`, `in_reply_to` or `like_of` is needed, since they are what name the pages a mention reaches.",
+      "description": "how each instance of a list object sends mentions. At least one of `content`, `in_reply_to`, `like_of` or `bookmark_of` is needed, since they are what name the pages a mention reaches.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -340,14 +340,22 @@
           "minLength": 1
         },
         "in_reply_to": {
-          "description": "the string field holding the address of the page this one replies to",
+          "description": "the string field holding the address of the page this one replies to, or a meta field and the key path to the address inside it, such as `link.url`. Only an https address is sent.",
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "pattern": "^[^.]+(\\.[^.]+)*$"
         },
         "like_of": {
-          "description": "the string field holding the address of the page this one likes",
+          "description": "the address of the page this one likes, read like `in_reply_to`",
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "pattern": "^[^.]+(\\.[^.]+)*$"
+        },
+        "bookmark_of": {
+          "description": "the address of the page this one bookmarks or shares, read like `in_reply_to`: a string field, or a meta field and the key path inside it, such as `link.url`",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^.]+(\\.[^.]+)*$"
         }
       }
     },
