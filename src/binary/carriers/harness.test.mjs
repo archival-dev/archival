@@ -207,6 +207,23 @@ test("each carrier API version is called its own way", async () => {
     site.atproto.reposts({ name: "no path" }),
     /site\.atproto needs a post/,
   );
+  assert.deepEqual(await site.interactions.counts([{ path: "artist/a" }]), [
+    { likes: 0, reposts: 0, replies: 0, mentions: 0, bookmarks: 0 },
+  ]);
+  assert.deepEqual(await site.interactions.replies("artist/a"), {
+    items: [],
+    total: 0,
+    next: null,
+  });
+  assert.deepEqual(await site.interactions.reactions({ path: "artist/a" }), {
+    items: [],
+    total: 0,
+    next: null,
+  });
+  await assert.rejects(
+    site.interactions.reactions({ name: "no path" }),
+    /site\.interactions needs a post/,
+  );
 });
 
 test("site.sql keeps what it is given in its database file", sqlite, async () => {

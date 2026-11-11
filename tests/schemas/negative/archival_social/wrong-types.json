@@ -1,0 +1,12 @@
+{
+  "activitypub": {
+    "posts": {
+      "post/hello": {
+        "counts": { "likes": "four", "boosts": 1, "replies": 1 },
+        "likes": { "items": [], "total": 4, "next": null },
+        "boosts": { "items": [], "total": 1, "next": null },
+        "replies": { "items": [], "total": 1, "next": null }
+      }
+    }
+  }
+}

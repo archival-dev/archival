@@ -1,6 +1,7 @@
 //! Tests for the JSON Schema files checked in at the repo root
 //! (`archival.schema.json`, `archival_objects.schema.json`,
-//! `archival_editor.schema.json` and `archival_template.schema.json`).
+//! `archival_editor.schema.json`, `archival_template.schema.json` and
+//! `archival_social.schema.json`).
 //!
 //! These files are published to <https://archival.dev/schemas/> and registered
 //! with SchemaStore, so editors hand them to users as autocompletion and
@@ -24,7 +25,7 @@
 
 use crate::fields::FieldType;
 use crate::manifest::ManifestField;
-use crate::reserved_fields::RESERVED_FIELDS;
+use crate::reserved_fields::{RESERVED_FIELDS, RESERVED_OBJECT_NAMES};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -35,7 +36,7 @@ const DRAFT_07: &str = "http://json-schema.org/draft-07/schema#";
 /// Every schema file published from this repo, paired with the constant that
 /// embeds it. Going through [`crate::schemas`] rather than re-reading the files
 /// means these tests check what dependents actually get.
-const SCHEMAS: [(&str, &str); 4] = [
+const SCHEMAS: [(&str, &str); 5] = [
     ("archival.schema.json", crate::schemas::ARCHIVAL),
     (
         "archival_objects.schema.json",
@@ -48,6 +49,10 @@ const SCHEMAS: [(&str, &str); 4] = [
     (
         "archival_template.schema.json",
         crate::schemas::ARCHIVAL_TEMPLATE,
+    ),
+    (
+        "archival_social.schema.json",
+        crate::schemas::ARCHIVAL_SOCIAL,
     ),
 ];
 
@@ -262,15 +267,20 @@ fn manifest_schema_matches_parser() {
 fn objects_schema_forbids_the_reserved_fields() {
     let schema = schema("archival_objects.schema.json");
     let reserved: BTreeSet<String> = RESERVED_FIELDS.iter().map(|f| f.to_string()).collect();
+    let object_names: BTreeSet<String> = reserved
+        .iter()
+        .cloned()
+        .chain(RESERVED_OBJECT_NAMES.iter().map(|n| n.to_string()))
+        .collect();
 
     assert_eq!(
         string_set(
             schema.pointer("/definitions/objectName/not/enum"),
             "archival_objects.schema.json objectName",
         ),
-        reserved,
-        "archival_objects.schema.json must forbid exactly the names in RESERVED_FIELDS as \
-         object names — ObjectDefinition::new rejects all of them."
+        object_names,
+        "archival_objects.schema.json must forbid exactly the names in RESERVED_FIELDS and \
+         RESERVED_OBJECT_NAMES as object names — ObjectDefinition::new_root rejects all of them."
     );
 
     // `template` is reserved as a field, but `template = "<page>"` is how an
@@ -311,7 +321,7 @@ fn fixture_files(kind: &str, schema_name: &str) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
         .unwrap_or_else(|e| panic!("reading {}: {}", dir.display(), e))
         .map(|entry| entry.expect("reading dir entry").path())
-        .filter(|path| path.extension().is_some_and(|e| e == "toml"))
+        .filter(|path| path.extension().is_some_and(|e| e == "toml" || e == "json"))
         .collect();
     files.sort();
     assert!(
@@ -325,6 +335,10 @@ fn fixture_files(kind: &str, schema_name: &str) -> Vec<PathBuf> {
 fn fixture_json(path: &Path) -> Value {
     let contents = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("reading {}: {}", path.display(), e));
+    if path.extension().is_some_and(|e| e == "json") {
+        return serde_json::from_str(&contents)
+            .unwrap_or_else(|e| panic!("parsing {}: {}", path.display(), e));
+    }
     let table: toml::Table =
         toml::from_str(&contents).unwrap_or_else(|e| panic!("parsing {}: {}", path.display(), e));
     serde_json::to_value(table)

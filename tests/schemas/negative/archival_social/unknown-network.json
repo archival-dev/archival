@@ -1,0 +1,26 @@
+{
+  "interactions": {
+    "post/hello": {
+      "counts": {
+        "likes": 1,
+        "reposts": 0,
+        "replies": 0,
+        "mentions": 0,
+        "bookmarks": 0
+      },
+      "replies": { "items": [], "total": 0, "next": null },
+      "reactions": {
+        "items": [
+          {
+            "network": "threads",
+            "kind": "like",
+            "author": {},
+            "at": "2026-11-02T00:00:00Z"
+          }
+        ],
+        "total": 1,
+        "next": null
+      }
+    }
+  }
+}

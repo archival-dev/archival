@@ -20,6 +20,7 @@ SCHEMAS=(
     archival_objects.schema.json
     archival_editor.schema.json
     archival_template.schema.json
+    archival_social.schema.json
 )
 
 echo "---- ajv strict mode"

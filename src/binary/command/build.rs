@@ -6,9 +6,10 @@ use crate::{
     },
     file_system_stdlib,
     site::Site,
+    social::SocialSnapshot,
     BuildOptions, ScriptErrors,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{arg, value_parser, ArgMatches};
 use std::{
     path::{Component, Path, PathBuf},
@@ -62,6 +63,14 @@ impl BinaryCommand for Command {
                 .value_parser(value_parser!(PathBuf)),
         ).arg(
             arg!(-s --"skip-failures" "If a page fails to build, continue building other pages rather than erroring early, and skip the failing page.").required(false),
+        ).arg(
+            arg!(--social <social_file> "A social snapshot (archival_social.schema.json) to render under the `archival` global")
+                .required(false)
+                .value_parser(value_parser!(PathBuf)),
+        ).arg(
+            arg!(--report <report_file> "Write a JSON report of the build to this file")
+                .required(false)
+                .value_parser(value_parser!(PathBuf)),
         ), CommandConfig::archival_site())
     }
     fn handler(
@@ -100,7 +109,20 @@ impl BinaryCommand for Command {
                 _ => return Err(e),
             }
         }
+        if let Some(social_file) = args.get_one::<PathBuf>("social") {
+            let json = std::fs::read_to_string(social_file).with_context(|| {
+                format!("failed reading social snapshot {}", social_file.display())
+            })?;
+            let social = SocialSnapshot::from_json(&json)
+                .with_context(|| format!("invalid social snapshot {}", social_file.display()))?;
+            site.set_social(Some(social));
+        }
         site.build(&mut fs, options)?;
+        if let Some(report_file) = args.get_one::<PathBuf>("report") {
+            let report = serde_json::json!({ "readsSocial": site.reads_social() });
+            std::fs::write(report_file, format!("{report}\n"))
+                .with_context(|| format!("failed writing report {}", report_file.display()))?;
+        }
         Ok(ExitStatus::Ok)
     }
 }

@@ -676,6 +676,37 @@ const makeATProto = (name) => {
   });
 };
 
+/**
+ * A local run has no interactions on any network, so every post reads as one
+ * nothing has reached, as a deployed carrier's facade does with no site behind it.
+ */
+const makeInteractions = (name) => {
+  const postPath = (post) => {
+    const path = post && typeof post === "object" ? post.path : post;
+    if (typeof path !== "string") {
+      throw new Error(name + " needs a post: one of your objects, or its path");
+    }
+    return path;
+  };
+  const emptyPage = async (post) => {
+    postPath(post);
+    return { items: [], total: 0, next: null };
+  };
+  return Object.freeze({
+    counts: async (posts) => {
+      if (!Array.isArray(posts)) {
+        throw new Error(name + ".counts takes a list of posts");
+      }
+      return posts.map((post) => {
+        postPath(post);
+        return { likes: 0, reposts: 0, replies: 0, mentions: 0, bookmarks: 0 };
+      });
+    },
+    replies: emptyPage,
+    reactions: emptyPage,
+  });
+};
+
 const CARRIER_CALLS = new Map([
   [
     1,
@@ -708,6 +739,7 @@ const CARRIER_CALLS = new Map([
           activitypub: makeActivityPub("site.activitypub"),
           webmentions: makeWebmentions("site.webmentions"),
           atproto: makeATProto("site.atproto"),
+          interactions: makeInteractions("site.interactions"),
         }),
       ),
   ],

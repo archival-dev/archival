@@ -310,7 +310,8 @@ mod carrier_tests {
                 "sql",
                 "activitypub",
                 "webmentions",
-                "atproto"
+                "atproto",
+                "interactions"
             ])
         );
     }

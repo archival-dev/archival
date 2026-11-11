@@ -265,6 +265,77 @@ mod binary_tests {
         _ = fs::remove_dir_all(out_path);
     }
 
+    #[test]
+    #[traced_test]
+    fn build_renders_a_social_snapshot_and_reports_reading_it() {
+        let site_path = copy_fixture_site();
+        let social = format!(
+            "{}/tests/schemas/positive/archival_social/full.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let report = format!("{site_path}-report.json");
+        let build = || {
+            archival::binary::binary(
+                get_args(vec![
+                    "build",
+                    &site_path,
+                    "--upload-prefix",
+                    "test",
+                    "--social",
+                    &social,
+                    "--report",
+                    &report,
+                ]),
+                None,
+            )
+        };
+        let reads_social = || -> bool {
+            let report: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&report).unwrap()).unwrap();
+            report["readsSocial"].as_bool().unwrap()
+        };
+
+        build().unwrap();
+        assert!(!reads_social());
+
+        fs::write(
+            format!("{site_path}/pages/social.liquid"),
+            "{{ archival.activitypub.account.handle }}\n",
+        )
+        .unwrap();
+        build().unwrap();
+        assert!(reads_social());
+        assert_eq!(
+            fs::read_to_string(format!("{site_path}/dist/social.html"))
+                .unwrap()
+                .trim(),
+            "@news@example.com"
+        );
+
+        let broken = format!("{site_path}-broken.json");
+        fs::write(&broken, "{\"interactions\": []}").unwrap();
+        let Err(err) = archival::binary::binary(
+            get_args(vec![
+                "build",
+                &site_path,
+                "--upload-prefix",
+                "test",
+                "--social",
+                &broken,
+            ]),
+            None,
+        ) else {
+            panic!("an invalid social snapshot built");
+        };
+        assert!(
+            format!("{err:#}").contains("invalid social snapshot"),
+            "{err:#}"
+        );
+        _ = fs::remove_dir_all(&site_path);
+        _ = fs::remove_file(report);
+        _ = fs::remove_file(broken);
+    }
+
     #[cfg(feature = "compile-scripts")]
     #[test]
     #[traced_test]
