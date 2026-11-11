@@ -151,6 +151,19 @@ impl ObjectDefinition {
         Self::from_table(&table, &comments, editor_types)
     }
 
+    /// A top-level object, whose name also becomes a key of every page's context.
+    pub(crate) fn new_root(
+        name: &str,
+        definition: &Table,
+        comments: &DefinitionComments,
+        editor_types: &EditorTypes,
+    ) -> Result<ObjectDefinition> {
+        if reserved_fields::is_reserved_object_name(name) {
+            return Err(InvalidFieldError::ReservedObjectNameError(name.to_string()).into());
+        }
+        Self::new(name, definition, comments, editor_types)
+    }
+
     pub fn new(
         name: &str,
         definition: &Table,
@@ -253,7 +266,7 @@ impl ObjectDefinition {
             if let Some(def) = m_def.as_table() {
                 objects.insert(
                     name.clone(),
-                    ObjectDefinition::new(name, def, comments.child(name), editor_types)?,
+                    ObjectDefinition::new_root(name, def, comments.child(name), editor_types)?,
                 );
             }
         }

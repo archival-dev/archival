@@ -2,6 +2,7 @@ use crate::liquid_kstring::KStringCow;
 use crate::{
     object::{Object, ObjectEntry},
     object_definition::ObjectDefinition,
+    social::{SocialSnapshot, SocialView, ARCHIVAL_GLOBAL},
     tags::render::RenderContext,
     FieldConfig, ObjectDefinitions, ObjectMap,
 };
@@ -113,6 +114,7 @@ impl fmt::Debug for PageTemplate<'_> {
 #[derive(Debug)]
 pub struct RenderGlobals<'a> {
     pub site_url: Cow<'a, str>,
+    pub social: Option<&'a SocialSnapshot>,
 }
 
 impl RenderGlobals<'_> {
@@ -212,7 +214,7 @@ pub fn build_context(
     definitions: &ObjectDefinitions,
     field_config: &FieldConfig,
     globals: &RenderGlobals,
-) -> (liquid::Object, ContextSignatures) {
+) -> (SharedContext, ContextSignatures) {
     let _span = tracing::trace_span!("build_context").entered();
     let mut context = liquid::Object::new();
     let mut objects = liquid::Object::new();
@@ -245,6 +247,10 @@ pub fn build_context(
         context.insert(plural.into(), values);
     }
     globals.inject(&mut context);
+    let archival = SocialView::new(globals.social);
+    signatures
+        .keys
+        .insert(ARCHIVAL_GLOBAL.to_owned(), signature(&archival.to_value()));
     for (key, value) in context.iter() {
         signatures
             .keys
@@ -271,7 +277,21 @@ pub fn build_context(
         hasher.write_u64(*sig);
     }
     signatures.everything = hasher.finish();
-    (context, signatures)
+    (
+        SharedContext {
+            values: context,
+            archival,
+        },
+        signatures,
+    )
+}
+
+/// The context every page in a build shares: the objects and plain globals, and
+/// the `archival` global, which answers unknown keys and so cannot be a plain value.
+#[derive(Debug)]
+pub(crate) struct SharedContext {
+    pub(crate) values: liquid::Object,
+    pub(crate) archival: SocialView,
 }
 
 /// The shared context's `objects` entry, under which every object type appears a
@@ -397,12 +417,18 @@ impl liquid::ObjectView for RecordingObjects<'_> {
 struct LayeredContext<'a> {
     overlay: &'a liquid::Object,
     base: &'a liquid::Object,
+    archival: &'a SocialView,
     reads: &'a ContextReads,
     objects: Option<RecordingObjects<'a>>,
 }
 
 impl<'a> LayeredContext<'a> {
-    fn new(overlay: &'a liquid::Object, base: &'a liquid::Object, reads: &'a ContextReads) -> Self {
+    fn new(
+        overlay: &'a liquid::Object,
+        shared: &'a SharedContext,
+        reads: &'a ContextReads,
+    ) -> Self {
+        let base = &shared.values;
         let objects = match base.get(OBJECTS_KEY) {
             Some(Value::Object(inner)) => Some(RecordingObjects { inner, reads }),
             _ => None,
@@ -410,15 +436,21 @@ impl<'a> LayeredContext<'a> {
         Self {
             overlay,
             base,
+            archival: &shared.archival,
             reads,
             objects,
         }
+    }
+
+    fn in_base(&self, key: &str) -> bool {
+        !self.overlay.contains_key(key) && key != ARCHIVAL_GLOBAL
     }
 }
 
 impl LayeredContext<'_> {
     fn merged(&self) -> liquid::Object {
         let mut merged = self.base.clone();
+        merged.insert(ARCHIVAL_GLOBAL.into(), self.archival.to_value());
         merged.extend(self.overlay.iter().map(|(k, v)| (k.clone(), v.clone())));
         merged
     }
@@ -474,15 +506,14 @@ impl liquid::ObjectView for LayeredContext<'_> {
     }
     fn keys<'k>(&'k self) -> Box<dyn Iterator<Item = KStringCow<'k>> + 'k> {
         self.reads.note(ContextDep::Everything);
+        let archival = (!self.overlay.contains_key(ARCHIVAL_GLOBAL))
+            .then_some(KStringCow::from_static(ARCHIVAL_GLOBAL));
         Box::new(
             self.overlay
                 .keys()
-                .chain(
-                    self.base
-                        .keys()
-                        .filter(|k| !self.overlay.contains_key(k.as_str())),
-                )
-                .map(|k| k.as_ref().into()),
+                .chain(self.base.keys().filter(|k| self.in_base(k.as_str())))
+                .map(|k| k.as_ref().into())
+                .chain(archival),
         )
     }
     fn values<'k>(&'k self) -> Box<dyn Iterator<Item = &'k dyn ValueView> + 'k> {
@@ -490,15 +521,16 @@ impl liquid::ObjectView for LayeredContext<'_> {
     }
     fn iter<'k>(&'k self) -> Box<dyn Iterator<Item = (KStringCow<'k>, &'k dyn ValueView)> + 'k> {
         self.reads.note(ContextDep::Everything);
+        let archival = (!self.overlay.contains_key(ARCHIVAL_GLOBAL)).then_some((
+            KStringCow::from_static(ARCHIVAL_GLOBAL),
+            self.archival as &dyn ValueView,
+        ));
         Box::new(
             self.overlay
                 .iter()
-                .chain(
-                    self.base
-                        .iter()
-                        .filter(|(k, _)| !self.overlay.contains_key(k.as_str())),
-                )
-                .map(|(k, v)| (k.as_ref().into(), v.as_view())),
+                .chain(self.base.iter().filter(|(k, _)| self.in_base(k.as_str())))
+                .map(|(k, v)| (k.as_ref().into(), v.as_view()))
+                .chain(archival),
         )
     }
     fn contains_key(&self, index: &str) -> bool {
@@ -509,7 +541,7 @@ impl liquid::ObjectView for LayeredContext<'_> {
             return true;
         }
         self.reads.note(ContextDep::Key(index.to_owned()));
-        self.base.contains_key(index)
+        index == ARCHIVAL_GLOBAL || self.base.contains_key(index)
     }
     fn get<'s>(&'s self, index: &str) -> Option<&'s dyn ValueView> {
         if let Some(value) = self.overlay.get(index) {
@@ -521,6 +553,9 @@ impl liquid::ObjectView for LayeredContext<'_> {
             }
         }
         self.reads.note(ContextDep::Key(index.to_owned()));
+        if index == ARCHIVAL_GLOBAL {
+            return Some(self.archival);
+        }
         self.base.get(index).map(|v| v.as_view())
     }
 }
@@ -666,7 +701,7 @@ impl<'a> Page<'a> {
     pub fn render(
         &self,
         parser: &crate::liquid_parser::Parser,
-        base_context: &liquid::Object,
+        base_context: &SharedContext,
         field_config: &FieldConfig,
         reads: &ContextReads,
     ) -> Result<String> {
@@ -954,6 +989,7 @@ here is a liquid variable: {{site_url}}
         let liquid_parser = liquid_parser::get(None, None, &MemoryFileSystem::default())?;
         let globals = RenderGlobals {
             site_url: "https://foo.bar".into(),
+            social: None,
         };
         let field_config = FieldConfig {
             uploads_url: "https://uploads.foo.bar".into(),
@@ -1014,6 +1050,7 @@ here is a liquid variable: {{site_url}}
         let liquid_parser = liquid_parser::get(None, None, &MemoryFileSystem::default())?;
         let globals = RenderGlobals {
             site_url: "https://foo.bar".into(),
+            social: None,
         };
         let field_config = FieldConfig::default();
         let (base_context, _signatures) = build_context(
@@ -1042,6 +1079,7 @@ here is a liquid variable: {{site_url}}
     fn template_page() -> Result<()> {
         let globals = RenderGlobals {
             site_url: "https://foo.bar".into(),
+            social: None,
         };
         let field_config = FieldConfig {
             uploads_url: "https://uploads.foo.bar".into(),
@@ -1096,6 +1134,7 @@ here is a liquid variable: {{site_url}}
         let liquid_parser = liquid_parser::get(None, None, &MemoryFileSystem::default())?;
         let globals = RenderGlobals {
             site_url: "https://foo.bar".into(),
+            social: None,
         };
         let field_config = FieldConfig::default();
         let objects_map = ObjectMap::from([("c".to_string(), ObjectEntry::from_vec(objects))]);
@@ -1218,6 +1257,7 @@ here is a liquid variable: {{site_url}}
     fn secret_fields_cannot_be_used_in_templates() -> Result<()> {
         let globals = RenderGlobals {
             site_url: "https://foo.bar".into(),
+            social: None,
         };
         let field_config = FieldConfig::default();
         let definition_map = get_definition_map();

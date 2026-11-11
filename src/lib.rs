@@ -28,6 +28,7 @@ pub mod schemas;
 mod scripts;
 mod site;
 mod sitemap;
+pub mod social;
 mod tags;
 #[cfg(test)]
 mod test_utils;

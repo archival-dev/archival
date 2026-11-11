@@ -1,0 +1,14 @@
+{
+  "interactions": {
+    "post/hello": {
+      "counts": {
+        "likes": 1,
+        "reposts": 0,
+        "replies": 0,
+        "mentions": 0,
+        "bookmarks": 0
+      },
+      "replies": { "items": [], "total": 0, "next": null }
+    }
+  }
+}

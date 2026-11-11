@@ -1,0 +1,228 @@
+{
+  "generatedAt": "2026-11-11T12:00:00Z",
+  "activitypub": {
+    "account": {
+      "handle": "@news@example.com",
+      "id": "https://example.com/_archival/ap/news",
+      "url": "https://example.com/",
+      "followers": 2,
+      "following": 1,
+      "posts": 3
+    },
+    "accounts": [
+      {
+        "handle": "@news@example.com",
+        "id": "https://example.com/_archival/ap/news",
+        "url": "https://example.com/",
+        "followers": 2,
+        "following": 1,
+        "posts": 3
+      }
+    ],
+    "followers": {
+      "items": [
+        {
+          "account": {
+            "id": "https://social.example/users/alice",
+            "handle": "@alice@social.example",
+            "name": "Alice",
+            "url": "https://social.example/@alice",
+            "icon": null
+          },
+          "follows": "@news@example.com",
+          "followedAt": "2026-11-01T00:00:00Z"
+        }
+      ],
+      "total": 2,
+      "next": "1761955200000.7"
+    },
+    "posts": {
+      "post/hello": {
+        "counts": { "likes": 4, "boosts": 1, "replies": 1 },
+        "likes": {
+          "items": [
+            {
+              "account": {
+                "id": "https://social.example/users/alice",
+                "handle": "@alice@social.example",
+                "name": "Alice",
+                "url": "https://social.example/@alice",
+                "icon": "https://social.example/alice.png"
+              },
+              "at": "2026-11-02T00:00:00Z"
+            }
+          ],
+          "total": 4,
+          "next": "1762041600000.3"
+        },
+        "boosts": { "items": [], "total": 1, "next": null },
+        "replies": {
+          "items": [
+            {
+              "id": "https://social.example/users/alice/statuses/1",
+              "url": "https://social.example/@alice/1",
+              "inReplyTo": "https://example.com/_archival/ap/news/objects/post/hello",
+              "account": {
+                "id": "https://social.example/users/alice",
+                "handle": "@alice@social.example",
+                "name": "Alice",
+                "url": "https://social.example/@alice",
+                "icon": null
+              },
+              "content": "<p>Lovely post</p>",
+              "summary": null,
+              "sensitive": false,
+              "attachments": [],
+              "published": "2026-11-02T00:00:00Z",
+              "updated": null
+            }
+          ],
+          "total": 1,
+          "next": null
+        }
+      }
+    }
+  },
+  "atproto": {
+    "account": {
+      "did": "did:web:example.com",
+      "handle": "example.com",
+      "url": "https://bsky.app/profile/example.com",
+      "followers": 5,
+      "following": 0,
+      "posts": 3
+    },
+    "followers": { "items": [], "total": 5, "next": null },
+    "posts": {
+      "post/hello": {
+        "counts": { "likes": 2, "reposts": 0, "replies": 1 },
+        "likes": { "items": [], "total": 2, "next": null },
+        "reposts": { "items": [], "total": 0, "next": null },
+        "replies": {
+          "items": [
+            {
+              "uri": "at://did:plc:bob/app.bsky.feed.post/1",
+              "url": "https://bsky.app/profile/did:plc:bob/post/1",
+              "inReplyTo": "at://did:web:example.com/app.bsky.feed.post/hello",
+              "account": {
+                "did": "did:plc:bob",
+                "handle": "bob.example",
+                "name": null,
+                "url": "https://bsky.app/profile/did:plc:bob",
+                "avatar": null
+              },
+              "text": "Nice",
+              "published": "2026-11-03T00:00:00Z"
+            }
+          ],
+          "total": 1,
+          "next": null
+        }
+      }
+    }
+  },
+  "webmentions": {
+    "pages": {
+      "": {
+        "counts": {
+          "replies": 0,
+          "likes": 0,
+          "reposts": 0,
+          "bookmarks": 0,
+          "mentions": 1
+        },
+        "list": {
+          "items": [
+            {
+              "source": "https://blog.example/links",
+              "url": "https://blog.example/links",
+              "kind": "mention",
+              "author": {
+                "name": "Carol",
+                "url": "https://blog.example/",
+                "photo": null
+              },
+              "name": "Links",
+              "content": null,
+              "published": null,
+              "received": "2026-11-04T00:00:00Z",
+              "updated": null
+            }
+          ],
+          "total": 1,
+          "next": null
+        }
+      }
+    }
+  },
+  "interactions": {
+    "post/hello": {
+      "counts": {
+        "likes": 6,
+        "reposts": 1,
+        "replies": 2,
+        "mentions": 0,
+        "bookmarks": 0
+      },
+      "replies": {
+        "items": [
+          {
+            "network": "activitypub",
+            "id": "https://social.example/users/alice/statuses/1",
+            "url": "https://social.example/@alice/1",
+            "inReplyTo": null,
+            "author": {
+              "name": "Alice",
+              "handle": "@alice@social.example",
+              "url": "https://social.example/@alice",
+              "avatar": null
+            },
+            "content": "<p>Lovely post</p>",
+            "summary": null,
+            "sensitive": false,
+            "attachments": [],
+            "published": "2026-11-02T00:00:00Z",
+            "updated": null
+          },
+          {
+            "network": "atproto",
+            "id": "at://did:plc:bob/app.bsky.feed.post/1",
+            "url": "https://bsky.app/profile/did:plc:bob/post/1",
+            "inReplyTo": null,
+            "author": {
+              "name": null,
+              "handle": "bob.example",
+              "url": "https://bsky.app/profile/did:plc:bob",
+              "avatar": null
+            },
+            "content": "<p>Nice</p>",
+            "summary": null,
+            "sensitive": false,
+            "attachments": [],
+            "published": "2026-11-03T00:00:00Z",
+            "updated": null
+          }
+        ],
+        "total": 2,
+        "next": null
+      },
+      "reactions": {
+        "items": [
+          {
+            "network": "activitypub",
+            "kind": "like",
+            "author": {
+              "name": "Alice",
+              "handle": "@alice@social.example",
+              "url": "https://social.example/@alice",
+              "avatar": "https://social.example/alice.png"
+            },
+            "at": "2026-11-02T00:00:00Z"
+          }
+        ],
+        "total": 7,
+        "next": "eyJhcCI6IjE3NjIwNDE2MDAwMDAuMyJ9"
+      }
+    }
+  }
+}

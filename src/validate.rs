@@ -81,7 +81,8 @@ pub fn definitions(
         let Some(definition) = value.as_table() else {
             continue;
         };
-        let whole = ObjectDefinition::new(name, definition, comments.child(name), editor_types);
+        let whole =
+            ObjectDefinition::new_root(name, definition, comments.child(name), editor_types);
         let Err(err) = whole else {
             continue;
         };

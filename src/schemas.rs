@@ -17,3 +17,5 @@ pub const ARCHIVAL_OBJECTS: &str = include_str!("../archival_objects.schema.json
 pub const ARCHIVAL_EDITOR: &str = include_str!("../archival_editor.schema.json");
 /// Schema for `archival_template.toml`.
 pub const ARCHIVAL_TEMPLATE: &str = include_str!("../archival_template.schema.json");
+/// Schema for the social snapshot `archival build --social` reads.
+pub const ARCHIVAL_SOCIAL: &str = include_str!("../archival_social.schema.json");

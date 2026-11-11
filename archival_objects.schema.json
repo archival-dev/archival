@@ -15,6 +15,7 @@
       "description": "objects may not be named with one of archival's reserved names",
       "not": {
         "enum": [
+          "archival",
           "object_name",
           "order",
           "objects",

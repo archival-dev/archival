@@ -309,7 +309,9 @@ mod carrier_tests {
                 "email",
                 "sql",
                 "activitypub",
-                "webmentions"
+                "webmentions",
+                "atproto",
+                "interactions"
             ])
         );
     }

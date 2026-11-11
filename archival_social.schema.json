@@ -1,0 +1,811 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://archival.dev/schemas/archival_social.schema.json",
+  "title": "Archival social snapshot",
+  "description": "What the social web has done with a site, handed to `archival build --social` and rendered under the `archival` global. Each section is what the matching carrier call answers; templates read the same keys in snake_case.",
+  "type": "object",
+  "properties": {
+    "generatedAt": {
+      "description": "When the snapshot was taken, ISO 8601.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "activitypub": {
+      "$ref": "#/definitions/activitypub"
+    },
+    "atproto": {
+      "$ref": "#/definitions/atproto"
+    },
+    "webmentions": {
+      "$ref": "#/definitions/webmentions"
+    },
+    "interactions": {
+      "type": "object",
+      "description": "What `site.interactions` answers, keyed by an object's `path`.",
+      "additionalProperties": {
+        "$ref": "#/definitions/postInteractions"
+      }
+    }
+  },
+  "definitions": {
+    "nullableString": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "cursor": {
+      "description": "Pass as `cursor` to the matching carrier call for the following page; null on the last.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "activitypub": {
+      "type": "object",
+      "description": "What `site.activitypub` answers.",
+      "required": [],
+      "properties": {
+        "account": {
+          "description": "`site.activitypub.account()`.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/activityPubAccount"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "accounts": {
+          "description": "`site.activitypub.accounts()`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/activityPubAccount"
+          }
+        },
+        "followers": {
+          "$ref": "#/definitions/followerPage"
+        },
+        "posts": {
+          "type": "object",
+          "description": "Keyed by an object's `path`.",
+          "additionalProperties": {
+            "$ref": "#/definitions/activityPubPost"
+          }
+        }
+      }
+    },
+    "activityPubAccount": {
+      "type": "object",
+      "required": ["handle", "id", "url", "followers", "following", "posts"],
+      "properties": {
+        "handle": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "followers": {
+          "$ref": "#/definitions/count"
+        },
+        "following": {
+          "$ref": "#/definitions/count"
+        },
+        "posts": {
+          "$ref": "#/definitions/count"
+        }
+      }
+    },
+    "fediverseAccount": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "handle": {
+          "$ref": "#/definitions/nullableString"
+        },
+        "name": {
+          "$ref": "#/definitions/nullableString"
+        },
+        "url": {
+          "$ref": "#/definitions/nullableString"
+        },
+        "icon": {
+          "$ref": "#/definitions/nullableString"
+        }
+      }
+    },
+    "follower": {
+      "type": "object",
+      "required": ["account", "follows", "followedAt"],
+      "properties": {
+        "account": {
+          "$ref": "#/definitions/fediverseAccount"
+        },
+        "follows": {
+          "type": "string"
+        },
+        "followedAt": {
+          "type": "string"
+        }
+      }
+    },
+    "followerPage": {
+      "type": "object",
+      "description": "`site.activitypub.followers()`.",
+      "required": ["items", "total", "next"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/follower"
+          }
+        },
+        "total": {
+          "$ref": "#/definitions/count"
+        },
+        "next": {
+          "$ref": "#/definitions/cursor"
+        }
+      }
+    },
+    "activityPubPost": {
+      "type": "object",
+      "required": ["counts", "likes", "boosts", "replies"],
+      "properties": {
+        "counts": {
+          "type": "object",
+          "description": "`site.activitypub.counts([post])[0]`.",
+          "required": ["likes", "boosts", "replies"],
+          "properties": {
+            "likes": {
+              "$ref": "#/definitions/count"
+            },
+            "boosts": {
+              "$ref": "#/definitions/count"
+            },
+            "replies": {
+              "$ref": "#/definitions/count"
+            }
+          }
+        },
+        "likes": {
+          "$ref": "#/definitions/reactionPage"
+        },
+        "boosts": {
+          "$ref": "#/definitions/reactionPage"
+        },
+        "replies": {
+          "$ref": "#/definitions/replyPage"
+        }
+      }
+    },
+    "reaction": {
+      "type": "object",
+      "required": ["account", "at"],
+      "properties": {
+        "account": {
+          "$ref": "#/definitions/fediverseAccount"
+        },
+        "at": {
+          "type": "string"
+        }
+      }
+    },
+    "reactionPage": {
+      "type": "object",
+      "required": ["items", "total", "next"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/reaction"
+          }
+        },
+        "total": {
+          "$ref": "#/definitions/count"
+        },
+        "next": {
+          "$ref": "#/definitions/cursor"
+        }
+      }
+    },
+    "replyAttachment": {
+      "type": "object",
+      "required": ["url"],
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "mediaType": {
+          "$ref": "#/definitions/nullableString"
+        },
+        "description": {
+          "$ref": "#/definitions/nullableString"
+        }
+      }
+    },
+    "reply": {
+      "type": "object",
+      "required": [
+        "id",
+        "inReplyTo",
+        "account",
+        "content",
+        "sensitive",
+        "attachments",
+        "published"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "url": {
+          "$ref": "#/definitions/nullableString"
+        },
+        "inReplyTo": {
+          "type": "string"
+        },
+        "account": {
+          "$ref": "#/definitions/fediverseAccount"
+        },
+        "content": {
+          "description": "Sanitized HTML.",
+          "type": "string"
+        },
+        "summary": {
+          "$ref": "#/definitions/nullableString"
+        },
+        "sensitive": {
+          "type": "boolean"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/replyAttachment"
+          }
+        },
+        "published": {
+          "type": "string"
+        },
+        "updated": {
+          "$ref": "#/definitions/nullableString"
+        }
+      }
+    },
+    "replyPage": {
+      "type": "object",
+      "required": ["items", "total", "next"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/reply"
+          }
+        },
+        "total": {
+          "$ref": "#/definitions/count"
+        },
+        "next": {
+          "$ref": "#/definitions/cursor"
+        }
+      }
+    },
+    "atproto": {
+      "type": "object",
+      "description": "What `site.atproto` answers.",
+      "required": [],
+      "properties": {
+        "account": {
+          "description": "`site.atproto.account()`.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/atprotoSiteAccount"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "followers": {
+          "$ref": "#/definitions/atprotoFollowerPage"
+        },
+        "posts": {
+          "type": "object",
+          "description": "Keyed by an object's `path`.",
+          "additionalProperties": {
+            "$ref": "#/definitions/atprotoPost"
+          }
+        }
+      }
+    },
+    "atprotoAccount": {
+      "type": "object",
+      "required": ["did", "url"],
+      "properties": {
+        "did": {
+          "type": "string"
+        },
+        "handle": {
+          "$ref": "#/definitions/nullableString"
+        },
+        "name": {
+          "$ref": "#/definitions/nullableString"
+        },
+        "url": {
+          "type": "string"
+        },
+        "avatar": {
+          "$ref": "#/definitions/nullableString"
+        }
+      }
+    },
+    "atprotoSiteAccount": {
+      "type": "object",
+      "required": ["did", "handle", "url", "followers", "following", "posts"],
+      "properties": {
+        "did": {
+          "type": "string"
+        },
+        "handle": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "followers": {
+          "$ref": "#/definitions/count"
+        },
+        "following": {
+          "$ref": "#/definitions/count"
+        },
+        "posts": {
+          "$ref": "#/definitions/count"
+        }
+      }
+    },
+    "atprotoFollower": {
+      "type": "object",
+      "required": ["account", "followedAt"],
+      "properties": {
+        "account": {
+          "$ref": "#/definitions/atprotoAccount"
+        },
+        "followedAt": {
+          "type": "string"
+        }
+      }
+    },
+    "atprotoFollowerPage": {
+      "type": "object",
+      "description": "`site.atproto.followers()`.",
+      "required": ["items", "total", "next"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/atprotoFollower"
+          }
+        },
+        "total": {
+          "$ref": "#/definitions/count"
+        },
+        "next": {
+          "$ref": "#/definitions/cursor"
+        }
+      }
+    },
+    "atprotoReaction": {
+      "type": "object",
+      "required": ["account", "at"],
+      "properties": {
+        "account": {
+          "$ref": "#/definitions/atprotoAccount"
+        },
+        "at": {
+          "type": "string"
+        }
+      }
+    },
+    "atprotoReactionPage": {
+      "type": "object",
+      "required": ["items", "total", "next"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/atprotoReaction"
+          }
+        },
+        "total": {
+          "$ref": "#/definitions/count"
+        },
+        "next": {
+          "$ref": "#/definitions/cursor"
+        }
+      }
+    },
+    "atprotoReply": {
+      "type": "object",
+      "required": ["uri", "url", "inReplyTo", "account", "text", "published"],
+      "properties": {
+        "uri": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "inReplyTo": {
+          "type": "string"
+        },
+        "account": {
+          "$ref": "#/definitions/atprotoAccount"
+        },
+        "text": {
+          "description": "Plain text.",
+          "type": "string"
+        },
+        "published": {
+          "type": "string"
+        }
+      }
+    },
+    "atprotoReplyPage": {
+      "type": "object",
+      "required": ["items", "total", "next"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/atprotoReply"
+          }
+        },
+        "total": {
+          "$ref": "#/definitions/count"
+        },
+        "next": {
+          "$ref": "#/definitions/cursor"
+        }
+      }
+    },
+    "atprotoPost": {
+      "type": "object",
+      "required": ["counts", "likes", "reposts", "replies"],
+      "properties": {
+        "counts": {
+          "type": "object",
+          "description": "`site.atproto.counts([post])[0]`.",
+          "required": ["likes", "reposts", "replies"],
+          "properties": {
+            "likes": {
+              "$ref": "#/definitions/count"
+            },
+            "reposts": {
+              "$ref": "#/definitions/count"
+            },
+            "replies": {
+              "$ref": "#/definitions/count"
+            }
+          }
+        },
+        "likes": {
+          "$ref": "#/definitions/atprotoReactionPage"
+        },
+        "reposts": {
+          "$ref": "#/definitions/atprotoReactionPage"
+        },
+        "replies": {
+          "$ref": "#/definitions/atprotoReplyPage"
+        }
+      }
+    },
+    "webmentions": {
+      "type": "object",
+      "description": "What `site.webmentions` answers.",
+      "required": [],
+      "properties": {
+        "pages": {
+          "type": "object",
+          "description": "Keyed by page path: an object's `path`, or a site path like `about`; `\"\"` is the home page.",
+          "additionalProperties": {
+            "$ref": "#/definitions/webmentionPage"
+          }
+        }
+      }
+    },
+    "webmentionPage": {
+      "type": "object",
+      "required": ["counts", "list"],
+      "properties": {
+        "counts": {
+          "type": "object",
+          "description": "`site.webmentions.counts([page])[0]`.",
+          "required": ["replies", "likes", "reposts", "bookmarks", "mentions"],
+          "properties": {
+            "replies": {
+              "$ref": "#/definitions/count"
+            },
+            "likes": {
+              "$ref": "#/definitions/count"
+            },
+            "reposts": {
+              "$ref": "#/definitions/count"
+            },
+            "bookmarks": {
+              "$ref": "#/definitions/count"
+            },
+            "mentions": {
+              "$ref": "#/definitions/count"
+            }
+          }
+        },
+        "list": {
+          "type": "object",
+          "description": "`site.webmentions.list(page)`.",
+          "required": ["items", "total", "next"],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/webmention"
+              }
+            },
+            "total": {
+              "$ref": "#/definitions/count"
+            },
+            "next": {
+              "$ref": "#/definitions/cursor"
+            }
+          }
+        }
+      }
+    },
+    "webmentionKind": {
+      "enum": ["reply", "like", "repost", "bookmark", "mention"]
+    },
+    "webmentionAuthor": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "name": {
+          "$ref": "#/definitions/nullableString"
+        },
+        "url": {
+          "$ref": "#/definitions/nullableString"
+        },
+        "photo": {
+          "$ref": "#/definitions/nullableString"
+        }
+      }
+    },
+    "webmention": {
+      "type": "object",
+      "required": ["source", "url", "kind", "received"],
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/webmentionKind"
+        },
+        "author": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/webmentionAuthor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "$ref": "#/definitions/nullableString"
+        },
+        "content": {
+          "description": "Sanitized HTML, or null.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "published": {
+          "$ref": "#/definitions/nullableString"
+        },
+        "received": {
+          "type": "string"
+        },
+        "updated": {
+          "$ref": "#/definitions/nullableString"
+        }
+      }
+    },
+    "network": {
+      "enum": ["activitypub", "atproto", "webmention"]
+    },
+    "interactionAuthor": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "name": {
+          "$ref": "#/definitions/nullableString"
+        },
+        "handle": {
+          "$ref": "#/definitions/nullableString"
+        },
+        "url": {
+          "$ref": "#/definitions/nullableString"
+        },
+        "avatar": {
+          "$ref": "#/definitions/nullableString"
+        }
+      }
+    },
+    "interactionReply": {
+      "type": "object",
+      "required": [
+        "network",
+        "id",
+        "author",
+        "content",
+        "sensitive",
+        "attachments",
+        "published"
+      ],
+      "properties": {
+        "network": {
+          "$ref": "#/definitions/network"
+        },
+        "id": {
+          "type": "string"
+        },
+        "url": {
+          "$ref": "#/definitions/nullableString"
+        },
+        "inReplyTo": {
+          "$ref": "#/definitions/nullableString"
+        },
+        "author": {
+          "$ref": "#/definitions/interactionAuthor"
+        },
+        "content": {
+          "description": "Sanitized HTML; ATProto text is escaped.",
+          "type": "string"
+        },
+        "summary": {
+          "$ref": "#/definitions/nullableString"
+        },
+        "sensitive": {
+          "type": "boolean"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/replyAttachment"
+          }
+        },
+        "published": {
+          "type": "string"
+        },
+        "updated": {
+          "$ref": "#/definitions/nullableString"
+        }
+      }
+    },
+    "interactionReaction": {
+      "type": "object",
+      "required": ["network", "kind", "author", "at"],
+      "properties": {
+        "network": {
+          "$ref": "#/definitions/network"
+        },
+        "kind": {
+          "enum": ["like", "repost"]
+        },
+        "author": {
+          "$ref": "#/definitions/interactionAuthor"
+        },
+        "at": {
+          "type": "string"
+        }
+      }
+    },
+    "postInteractions": {
+      "type": "object",
+      "description": "What `site.interactions` answers for one post.",
+      "required": ["counts", "replies", "reactions"],
+      "properties": {
+        "counts": {
+          "type": "object",
+          "description": "`site.interactions.counts([post])[0]`, summed across networks.",
+          "required": ["likes", "reposts", "replies", "mentions", "bookmarks"],
+          "properties": {
+            "likes": {
+              "$ref": "#/definitions/count"
+            },
+            "reposts": {
+              "$ref": "#/definitions/count"
+            },
+            "replies": {
+              "$ref": "#/definitions/count"
+            },
+            "mentions": {
+              "$ref": "#/definitions/count"
+            },
+            "bookmarks": {
+              "$ref": "#/definitions/count"
+            }
+          }
+        },
+        "replies": {
+          "type": "object",
+          "description": "`site.interactions.replies(post)`, oldest first.",
+          "required": ["items", "total", "next"],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/interactionReply"
+              }
+            },
+            "total": {
+              "$ref": "#/definitions/count"
+            },
+            "next": {
+              "$ref": "#/definitions/cursor"
+            }
+          }
+        },
+        "reactions": {
+          "type": "object",
+          "description": "`site.interactions.reactions(post)`, newest first.",
+          "required": ["items", "total", "next"],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/interactionReaction"
+              }
+            },
+            "total": {
+              "$ref": "#/definitions/count"
+            },
+            "next": {
+              "$ref": "#/definitions/cursor"
+            }
+          }
+        }
+      }
+    }
+  }
+}

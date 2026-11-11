@@ -9,11 +9,12 @@ use crate::{
     object_definition::{ObjectDefinition, ObjectDefinitions},
     page::{
         build_context, ContextDep, ContextReads, ContextSignatures, Page, RenderGlobals,
-        TemplateType,
+        SharedContext, TemplateType,
     },
     read_toml::read_toml,
     scripts::{self, ScriptCollision, ScriptErrors, ScriptFailure, ScriptKind},
     sitemap::{self, ROBOTS_FILE_NAME, SITEMAP_FILE_NAME},
+    social::{SocialSnapshot, ARCHIVAL_GLOBAL},
     tags::layout,
     util::path_to_slash,
     ArchivalError, BuildOptions, FieldConfig, FileSystemAPI, ObjectMap,
@@ -28,7 +29,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{self, AtomicU64},
-        RwLock,
+        Arc, RwLock,
     },
 };
 use thiserror::Error;
@@ -294,6 +295,10 @@ pub struct Site {
     parser_cache: RwLock<Option<ParserCache>>,
     #[serde(skip)]
     render_cache: RwLock<HashMap<PathBuf, RenderRecord>>,
+    #[serde(skip)]
+    social: RwLock<Option<Arc<SocialSnapshot>>>,
+    #[serde(skip)]
+    social_signature: AtomicU64,
 }
 
 // Site is shared across threads (e.g. the dev server); keep it Send + Sync
@@ -392,6 +397,8 @@ impl Site {
             cache_generation: AtomicU64::new(0),
             parser_cache: RwLock::new(None),
             render_cache: RwLock::new(HashMap::new()),
+            social: RwLock::new(None),
+            social_signature: AtomicU64::new(0),
         })
     }
 
@@ -481,7 +488,35 @@ impl Site {
         // Include cache generation to ensure build_id changes after invalidation
         let generation = self.cache_generation.load(atomic::Ordering::Relaxed);
         hasher.write(&generation.to_ne_bytes());
+        hasher.write(
+            &self
+                .social_signature
+                .load(atomic::Ordering::Relaxed)
+                .to_ne_bytes(),
+        );
         hasher.finish()
+    }
+
+    /// The social snapshot the next build renders under `archival`; `None` renders
+    /// every value empty.
+    pub fn set_social(&self, social: Option<SocialSnapshot>) {
+        let signature = social.as_ref().map_or(0, |social| {
+            hash_source(&serde_json::to_string(social).unwrap_or_default())
+        });
+        *self.social.write().unwrap() = social.map(Arc::new);
+        self.social_signature
+            .store(signature, atomic::Ordering::Relaxed);
+    }
+
+    /// Whether any page the last build rendered read the `archival` global.
+    pub fn reads_social(&self) -> bool {
+        self.render_cache.read().unwrap().values().any(|record| {
+            record.deps.iter().any(|(dep, _)| match dep {
+                ContextDep::Key(key) => key == ARCHIVAL_GLOBAL,
+                ContextDep::Everything => true,
+                ContextDep::Object(_) => false,
+            })
+        })
     }
 
     pub fn schema_prefix(&self) -> String {
@@ -987,8 +1022,10 @@ impl Site {
             ..
         } = &self.manifest;
 
+        let social = self.social.read().unwrap().clone();
         let globals = RenderGlobals {
             site_url: self.manifest.absolute_site_url().unwrap_or_default(),
+            social: social.as_deref(),
         };
 
         let mut plan = WritePlan::default();
@@ -1229,7 +1266,7 @@ impl Site {
         template_hash: u64,
         partials_hash: u64,
         build_dir: &Path,
-        base_context: &liquid::Object,
+        base_context: &SharedContext,
         signatures: &ContextSignatures,
         liquid_parser: &liquid_parser::Parser,
         plan: &mut WritePlan,
@@ -1302,7 +1339,7 @@ impl Site {
         page_type: TemplateType,
         partials_hash: u64,
         build_dir: &Path,
-        base_context: &liquid::Object,
+        base_context: &SharedContext,
         signatures: &ContextSignatures,
         fs: &T,
         liquid_parser: &liquid_parser::Parser,
@@ -2158,6 +2195,65 @@ mod incremental_render {
             .map(|p| built(&archival, p))
             .collect();
         assert_eq!(before, after);
+    }
+
+    fn likes(count: u64) -> crate::social::SocialSnapshot {
+        let mut social = crate::social::SocialSnapshot::default();
+        let mut post = crate::social::PostInteractions::default();
+        post.counts.likes = count;
+        social
+            .interactions
+            .insert("articles/article-0".to_string(), post);
+        social
+    }
+
+    fn reads_archival(archival: &Archival<MemoryFileSystem>, path: &str) -> bool {
+        archival.site.render_cache.read().unwrap()[Path::new(path)]
+            .deps
+            .iter()
+            .any(|(dep, _)| *dep == super::ContextDep::Key("archival".to_string()))
+    }
+
+    /// Only a page that read `archival` depends on the snapshot, so a new one
+    /// re-renders those pages and reuses the rest.
+    #[test]
+    fn a_new_social_snapshot_reaches_the_pages_that_read_it() {
+        let mut fs = site();
+        fs.write_str(
+            "pages/article.liquid",
+            "{% layout 'theme' %}<h1>{{ articles.headline }}</h1>\
+             {{ archival.interactions[articles.path].counts.likes }} likes\n"
+                .to_string(),
+        )
+        .unwrap();
+        fs.write_str(
+            "pages/about.liquid",
+            "{{ objects.site.name }}\n".to_string(),
+        )
+        .unwrap();
+        let archival = Archival::new(fs).unwrap();
+        archival.build(BuildOptions::default()).unwrap();
+        assert!(built(&archival, "dist/articles/article-0.html").contains("0 likes"));
+        assert!(archival.site.reads_social());
+        assert!(reads_archival(&archival, "dist/articles/article-0.html"));
+        assert!(!reads_archival(&archival, "dist/about.html"));
+
+        archival.site.set_social(Some(likes(3)));
+        archival.build(BuildOptions::default()).unwrap();
+        assert!(built(&archival, "dist/articles/article-0.html").contains("3 likes"));
+        assert!(built(&archival, "dist/articles/article-1.html").contains("0 likes"));
+
+        archival.site.set_social(None);
+        archival.build(BuildOptions::default()).unwrap();
+        assert!(built(&archival, "dist/articles/article-0.html").contains("0 likes"));
+    }
+
+    #[test]
+    fn a_site_that_never_reads_archival_reports_so() {
+        let archival = Archival::new(site()).unwrap();
+        archival.site.set_social(Some(likes(3)));
+        archival.build(BuildOptions::default()).unwrap();
+        assert!(!archival.site.reads_social());
     }
 }
 
