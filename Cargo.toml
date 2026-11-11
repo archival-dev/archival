@@ -1,6 +1,6 @@
 [package]
 name = "archival"
-version = "0.27.1"
+version = "0.27.2"
 edition = "2021"
 rust-version = "1.96"
 license = "AGPL-3.0-or-later"
