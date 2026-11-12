@@ -311,7 +311,8 @@ mod carrier_tests {
                 "activitypub",
                 "webmentions",
                 "atproto",
-                "interactions"
+                "interactions",
+                "payments"
             ])
         );
     }
