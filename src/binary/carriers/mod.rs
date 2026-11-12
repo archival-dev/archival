@@ -6,6 +6,11 @@
 //! carrier API version), where `objects` is the site's object tree with
 //! `secret` fields included - the whole point of the feature. `site.sql` is a
 //! SQLite file in the build directory, which every carrier shares.
+//!
+//! `site.payments` answers from the JSON file `ARCHIVAL_PAYMENTS` names. A run
+//! that names one also serves the cart a site with a payment account gets, at
+//! `/_archival/cart.js` and `/_archival/checkout`, whether or not it has any
+//! carriers.
 
 pub(crate) mod discovery;
 pub(crate) mod host;
@@ -32,6 +37,17 @@ use tracing::{debug, warn};
 use walkdir::WalkDir;
 
 const DATABASE_FILE_NAME: &str = "site.sqlite";
+const PAYMENTS_ENV: &str = "ARCHIVAL_PAYMENTS";
+
+/// Whether this run was pointed at local payments, which the sidecar reads.
+fn names_payments() -> bool {
+    std::env::var_os(PAYMENTS_ENV).is_some_and(|file| !file.is_empty())
+}
+
+/// Whether this run has a payment account: the payments file it names is there.
+pub(crate) fn has_payment_account() -> bool {
+    std::env::var_os(PAYMENTS_ENV).is_some_and(|file| Path::new(&file).is_file())
+}
 
 /// Tracks what each watched carrier file last contained.
 ///
@@ -125,7 +141,8 @@ pub(crate) struct CarrierSupervisor {
 
 impl CarrierSupervisor {
     /// `None` when carriers were turned off. A site with no carriers yet still
-    /// gets one, idle until the first carrier is added.
+    /// gets one, idle until the first carrier is added unless the run names
+    /// local payments, which the sidecar serves the cart for.
     pub fn new(site_root: &Path, build_dir: &Path, options: CarrierOptions) -> Option<Self> {
         if options.disabled {
             return None;
@@ -288,7 +305,7 @@ impl Worker {
             .into_iter()
             .map(|carrier| (carrier.name, carrier.root))
             .collect();
-        if self.roots.is_empty() {
+        if self.roots.is_empty() && !names_payments() {
             self.seen.lock().unwrap().prime(&self.site_root);
             *self.state.write().unwrap() = ProxyState::Idle;
             *self.sidecar.lock().unwrap() = None;
@@ -320,18 +337,27 @@ impl Worker {
                 .expect("just stored")
                 .port(),
         };
-        println!(
-            "{} {}",
-            style("Carriers ready:").green(),
-            style(
-                self.roots
-                    .keys()
-                    .map(|n| format!("/carriers/{}", n))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            )
-            .green()
-        );
+        if !self.roots.is_empty() {
+            println!(
+                "{} {}",
+                style("Carriers ready:").green(),
+                style(
+                    self.roots
+                        .keys()
+                        .map(|n| format!("/carriers/{}", n))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                )
+                .green()
+            );
+        }
+        if has_payment_account() {
+            println!(
+                "{} {}",
+                style("Cart ready:").green(),
+                style(proxy::CART_PATHS.join(" ")).green()
+            );
+        }
         Ok(())
     }
 

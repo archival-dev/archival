@@ -1,4 +1,5 @@
-//! Forwards `/carriers/*` from the static server to the node sidecar.
+//! Forwards `/carriers/*` from the static server to the node sidecar, and the
+//! cart's two paths when the run has a payment account.
 
 use super::discovery::is_valid_name;
 use crate::server::DynamicHandler;
@@ -29,6 +30,10 @@ const STARTUP_GRACE: Duration = Duration::from_secs(30);
 /// sidecar out from under it; the bound stops a restart loop from holding a
 /// request open indefinitely.
 const MAX_ATTEMPTS: u8 = 3;
+
+/// What a site with a payment account answers for its cart: the script, and
+/// the checkout the script posts to when a page names no carrier.
+pub(crate) const CART_PATHS: [&str; 2] = ["/_archival/cart.js", "/_archival/checkout"];
 
 /// Headers that describe one hop and must not be forwarded to the next.
 const HOP_BY_HOP: &[&str] = &[
@@ -61,6 +66,11 @@ pub(crate) enum Route {
         name: String,
         upstream: String,
     },
+    /// One of `CART_PATHS`, which is the site's own path in a run with no
+    /// payment account.
+    Cart {
+        upstream: String,
+    },
     /// Shaped like a carrier request but not one we will route.
     Reject,
 }
@@ -72,6 +82,18 @@ pub(crate) fn route(raw_url: &str) -> Route {
         Some((path, query)) => (path, Some(query)),
         None => (raw_url, None),
     };
+    let with_query = |mut upstream: String| {
+        if let Some(query) = query {
+            upstream.push('?');
+            upstream.push_str(query);
+        }
+        upstream
+    };
+    if let Some(cart) = CART_PATHS.iter().find(|cart| **cart == path) {
+        return Route::Cart {
+            upstream: with_query(cart.to_string()),
+        };
+    }
     let rest = match path.strip_prefix("/carriers/") {
         Some(rest) => rest,
         None => return Route::Static,
@@ -90,13 +112,9 @@ pub(crate) fn route(raw_url: &str) -> Route {
         upstream.push('/');
         upstream.push_str(tail);
     }
-    if let Some(query) = query {
-        upstream.push('?');
-        upstream.push_str(query);
-    }
     Route::Carrier {
         name: name.to_string(),
-        upstream,
+        upstream: with_query(upstream),
     }
 }
 
@@ -171,8 +189,16 @@ impl CarrierProxy {
         let mut headers = reqwest::header::HeaderMap::new();
         for header in request.headers() {
             let name = header.field.as_str().as_str().to_lowercase();
+            // The sidecar is another host, so the one the browser asked for
+            // travels beside it: a checkout returns the buyer there.
+            if name == "host" {
+                if let Ok(value) = reqwest::header::HeaderValue::from_str(header.value.as_str()) {
+                    headers.insert("x-forwarded-host", value);
+                }
+                continue;
+            }
             if HOP_BY_HOP.contains(&name.as_str())
-                || name == "host"
+                || name == "x-forwarded-host"
                 || name == "content-length"
                 // Never let a client's header reach the sidecar's control plane.
                 || name == "x-archival-token"
@@ -307,7 +333,8 @@ impl DynamicHandler for CarrierProxy {
                 );
                 return None;
             }
-            Route::Carrier { upstream, .. } => upstream,
+            Route::Cart { .. } if !super::has_payment_account() => return Some(request),
+            Route::Cart { upstream } | Route::Carrier { upstream, .. } => upstream,
         };
         // tiny_http's accept loop is serial: a request handled inline blocks
         // every other one, including a carrier's own fetch of this site.
@@ -403,6 +430,25 @@ mod tests {
             carrier("/carriers/echo"),
             ("echo".to_string(), "/carrier/echo".to_string())
         );
+    }
+
+    #[test]
+    fn the_cart_has_two_paths_and_no_others() {
+        assert_eq!(
+            route("/_archival/cart.js"),
+            Route::Cart {
+                upstream: "/_archival/cart.js".to_string()
+            }
+        );
+        assert_eq!(
+            route("/_archival/checkout?from=shop"),
+            Route::Cart {
+                upstream: "/_archival/checkout?from=shop".to_string()
+            }
+        );
+        assert_eq!(route("/_archival/cart.json"), Route::Static);
+        assert_eq!(route("/_archival/checkout/x"), Route::Static);
+        assert_eq!(route("/_archival/"), Route::Static);
     }
 
     #[test]
