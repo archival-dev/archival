@@ -93,7 +93,9 @@ launched from archival.dev carries a **session** in the prompt — use it as-is
 and skip to step 2. Otherwise:
 
 1. `archival_start_session`, with a short `slug` for the site if you already
-   know one. It returns a link and a code.
+   know one — or, to keep working on a preview an earlier conversation built,
+   with `preview` set to the name or link they give you. It returns a link and
+   a code.
 2. Send **one** message: the link, the code, ask them to check the code matches
    on the page before approving, and — in the same message — the questions from
    step 3. That check is what stops a link someone else sent them from being
@@ -109,7 +111,10 @@ while you write a site against a session that was never approved costs a whole
 round trip and leaves you with nothing to show. If it has expired, mint another
 and say so in one line. Never invent a session or a preview name.
 
-The session lasts two hours once approved.
+The session lasts two hours once approved; the `expiresAt` the tools return is
+the session's. The preview itself stays up for weeks, so never tell them it is
+about to expire. When a session runs out, `archival_start_session` with
+`preview` picks the same preview up again.
 
 ## 2. Say what Archival is, in two sentences
 
