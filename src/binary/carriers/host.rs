@@ -21,6 +21,10 @@ const HARNESS_FILE_NAME: &str = "harness.mjs";
 /// harness imports it from beside itself.
 const TOOLCHAIN: &str = include_str!("toolchain.mjs");
 const TOOLCHAIN_FILE_NAME: &str = "toolchain.mjs";
+/// The script a site with a payment account serves at `/_archival/cart.js`,
+/// vendored by `update-cart.sh`. The harness reads it from beside itself.
+const CART: &str = include_str!("cart.js");
+const CART_FILE_NAME: &str = "cart.js";
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(10);
 const HEALTH_POLL: Duration = Duration::from_millis(20);
 
@@ -54,6 +58,7 @@ pub(crate) fn write_harness(dir: &Path) -> Result<PathBuf> {
     let path = dir.join(HARNESS_FILE_NAME);
     std::fs::write(&path, HARNESS)?;
     std::fs::write(dir.join(TOOLCHAIN_FILE_NAME), TOOLCHAIN)?;
+    std::fs::write(dir.join(CART_FILE_NAME), CART)?;
     Ok(path)
 }
 
@@ -241,6 +246,11 @@ mod tests {
             std::fs::read_to_string(dir.path().join(TOOLCHAIN_FILE_NAME)).unwrap(),
             TOOLCHAIN,
             "the harness imports the toolchain from beside itself"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(CART_FILE_NAME)).unwrap(),
+            CART,
+            "the harness serves the cart script from beside itself"
         );
     }
 }

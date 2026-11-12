@@ -1,5 +1,6 @@
 // Hosts a site's carriers for `archival run`. The dev server spawns this and
-// reverse-proxies /carriers/* to it.
+// reverse-proxies /carriers/* to it, along with the cart's script and checkout
+// under /_archival/ when the run has a payment account.
 //
 // A carrier is built by the toolchain beside this file (toolchain.mjs, vendored
 // from archival-dev/carriers-toolchain), which is the build every place that
@@ -712,8 +713,10 @@ const makeInteractions = (name) => {
  * What a local run sells: the file `ARCHIVAL_PAYMENTS` names, in the shape a
  * deployed carrier's `site.payments` answers (`account`, and `catalog.items`
  * holding each product with its variants). Without one, a local run reads as
- * a site with no payment account connected. Read again whenever it changes,
- * so stock a test took is put back by saving the file.
+ * a site with no payment account connected. With one, the run also serves the
+ * cart a site with a payment account gets: its script at /_archival/cart.js,
+ * and the checkout that script posts to at /_archival/checkout. Read again
+ * whenever it changes, so stock a test took is put back by saving the file.
  */
 let paymentsFile = { path: null, mtimeMs: 0, account: null, products: [] };
 
@@ -783,6 +786,131 @@ const checkoutUrl = (id) => {
 
 const CHECKOUT_MAX_ITEMS = 100;
 
+const localVariant = (id) =>
+  localPayments()
+    .products.flatMap((product) => product.variants)
+    .find((variant) => variant.id === id) ?? null;
+
+/**
+ * Starts a checkout `by` asked for over the local payments, or says why a
+ * deployed site refuses it, with the status its own checkout answers that
+ * with.
+ */
+const createCheckout = (checkout, by) => {
+  const refuse = (status, error, outOfStock) => ({
+    ok: false,
+    status,
+    error,
+    ...(outOfStock ? { outOfStock } : {}),
+  });
+  const { account, products } = localPayments();
+  if (!account) {
+    return refuse(422, "This site has no payment provider connected.");
+  }
+  const items = checkout?.items;
+  if (
+    !Array.isArray(items) ||
+    items.length === 0 ||
+    items.length > CHECKOUT_MAX_ITEMS
+  ) {
+    return refuse(400, "items must be a non-empty list");
+  }
+  for (const field of ["successUrl", "cancelUrl"]) {
+    const value = checkout[field];
+    if (
+      (field === "successUrl" || value != null) &&
+      (typeof value !== "string" || !URL.canParse(value))
+    ) {
+      return refuse(400, `${field} must be a url`);
+    }
+  }
+  if (checkout.idempotencyKey) {
+    const made = [...checkouts.values()].find(
+      (other) => other.idempotencyKey === checkout.idempotencyKey,
+    );
+    if (made) {
+      return { ok: true, id: made.id, url: checkoutUrl(made.id) };
+    }
+  }
+  const lines = [];
+  const short = [];
+  for (const [i, item] of items.entries()) {
+    if (!Number.isInteger(item?.quantity) || item.quantity < 1) {
+      return refuse(
+        400,
+        `items[${i}].quantity must be a whole number of at least 1`,
+      );
+    }
+    if (typeof item.variant === "string") {
+      const variant = localVariant(item.variant);
+      if (!variant) {
+        return refuse(
+          422,
+          `${item.variant} is not a variant this site's payment account sells`,
+        );
+      }
+      if (variant.amount == null) {
+        return refuse(
+          422,
+          `${item.variant} has no fixed price, so it cannot be put in a checkout`,
+        );
+      }
+      if (
+        !variant.available ||
+        (variant.stock != null && variant.stock < item.quantity)
+      ) {
+        short.push(variant.id);
+      }
+      lines.push({
+        variant: variant.id,
+        name: [
+          products.find((product) => product.id === variant.product)?.name,
+          variant.name,
+        ]
+          .filter(Boolean)
+          .join(" - "),
+        amount: variant.amount,
+        currency: variant.currency,
+        quantity: item.quantity,
+      });
+    } else if (
+      typeof item.name === "string" &&
+      item.name.trim() &&
+      Number.isInteger(item.amount) &&
+      item.amount >= 1
+    ) {
+      lines.push({
+        variant: null,
+        name: item.name.trim(),
+        amount: item.amount,
+        currency: account.currency,
+        quantity: item.quantity,
+      });
+    } else {
+      return refuse(400, `items[${i}] needs a variant, or a name and an amount`);
+    }
+  }
+  if (short.length) {
+    return refuse(409, "out_of_stock", short);
+  }
+  const id = `co_${randomUUID()}`;
+  const successUrl = new URL(checkout.successUrl);
+  successUrl.searchParams.set("checkout", id);
+  checkouts.set(id, {
+    id,
+    status: "open",
+    lines,
+    currency: lines[0].currency,
+    successUrl: successUrl.href,
+    cancelUrl: checkout.cancelUrl ?? null,
+    customerEmail: checkout.customerEmail ?? null,
+    idempotencyKey: checkout.idempotencyKey ?? null,
+  });
+  const url = checkoutUrl(id);
+  console.log(`[carrier] ${by} started a checkout: ${url}`);
+  return { ok: true, id, url };
+};
+
 /**
  * Builds the payments facade, which the carrier calls `name`. Lookups answer
  * from the local file, and a checkout is refused as a deployed one is, then
@@ -796,10 +924,6 @@ const makePayments = (name) => {
     }
     return ids;
   };
-  const variantOf = (id) =>
-    localPayments()
-      .products.flatMap((product) => product.variants)
-      .find((variant) => variant.id === id) ?? null;
   const fail = (method, message, outOfStock) => {
     const error = new Error(`${name}.${method} failed: ${message}`);
     if (outOfStock) {
@@ -831,121 +955,14 @@ const makePayments = (name) => {
           localPayments().products.find((product) => product.id === id) ??
           null,
       ),
-    variants: async (ids) => idList("variants", ids).map(variantOf),
+    variants: async (ids) => idList("variants", ids).map(localVariant),
     checkout: Object.freeze({
       create: async (checkout) => {
-        const method = "checkout.create";
-        const { account } = localPayments();
-        if (!account) {
-          throw fail(method, "This site has no payment provider connected.");
+        const made = createCheckout(checkout, name);
+        if (!made.ok) {
+          throw fail("checkout.create", made.error, made.outOfStock);
         }
-        const items = checkout?.items;
-        if (
-          !Array.isArray(items) ||
-          items.length === 0 ||
-          items.length > CHECKOUT_MAX_ITEMS
-        ) {
-          throw fail(method, "items must be a non-empty list");
-        }
-        for (const field of ["successUrl", "cancelUrl"]) {
-          const value = checkout[field];
-          if (
-            (field === "successUrl" || value != null) &&
-            (typeof value !== "string" || !URL.canParse(value))
-          ) {
-            throw fail(method, `${field} must be a url`);
-          }
-        }
-        if (checkout.idempotencyKey) {
-          const made = [...checkouts.values()].find(
-            (other) => other.idempotencyKey === checkout.idempotencyKey,
-          );
-          if (made) {
-            return { id: made.id, url: checkoutUrl(made.id) };
-          }
-        }
-        const lines = [];
-        const short = [];
-        for (const [i, item] of items.entries()) {
-          if (!Number.isInteger(item?.quantity) || item.quantity < 1) {
-            throw fail(
-              method,
-              `items[${i}].quantity must be a whole number of at least 1`,
-            );
-          }
-          if (typeof item.variant === "string") {
-            const variant = variantOf(item.variant);
-            if (!variant) {
-              throw fail(
-                method,
-                `${item.variant} is not a variant this site's payment account sells`,
-              );
-            }
-            if (variant.amount == null) {
-              throw fail(
-                method,
-                `${item.variant} has no fixed price, so it cannot be put in a checkout`,
-              );
-            }
-            if (
-              !variant.available ||
-              (variant.stock != null && variant.stock < item.quantity)
-            ) {
-              short.push(variant.id);
-            }
-            lines.push({
-              variant: variant.id,
-              name: [
-                localPayments().products.find(
-                  (product) => product.id === variant.product,
-                )?.name,
-                variant.name,
-              ]
-                .filter(Boolean)
-                .join(" - "),
-              amount: variant.amount,
-              currency: variant.currency,
-              quantity: item.quantity,
-            });
-          } else if (
-            typeof item.name === "string" &&
-            item.name.trim() &&
-            Number.isInteger(item.amount) &&
-            item.amount >= 1
-          ) {
-            lines.push({
-              variant: null,
-              name: item.name.trim(),
-              amount: item.amount,
-              currency: account.currency,
-              quantity: item.quantity,
-            });
-          } else {
-            throw fail(
-              method,
-              `items[${i}] needs a variant, or a name and an amount`,
-            );
-          }
-        }
-        if (short.length) {
-          throw fail(method, "out_of_stock", short);
-        }
-        const id = `co_${randomUUID()}`;
-        const successUrl = new URL(checkout.successUrl);
-        successUrl.searchParams.set("checkout", id);
-        checkouts.set(id, {
-          id,
-          status: "open",
-          lines,
-          currency: lines[0].currency,
-          successUrl: successUrl.href,
-          cancelUrl: checkout.cancelUrl ?? null,
-          customerEmail: checkout.customerEmail ?? null,
-          idempotencyKey: checkout.idempotencyKey ?? null,
-        });
-        const url = checkoutUrl(id);
-        console.log(`[carrier] ${name} started a checkout: ${url}`);
-        return { id, url };
+        return { id: made.id, url: made.url };
       },
       get: async (id) => {
         const checkout = checkouts.get(id);
@@ -1047,9 +1064,7 @@ export const checkoutResponse = (id, action) => {
     if (checkout.status === "open") {
       checkout.status = "paid";
       for (const line of checkout.lines) {
-        const variant = localPayments()
-          .products.flatMap((product) => product.variants)
-          .find((candidate) => candidate.id === line.variant);
+        const variant = localVariant(line.variant);
         if (variant && variant.stock != null) {
           variant.stock = Math.max(0, variant.stock - line.quantity);
           variant.available = variant.stock > 0;
@@ -1066,6 +1081,148 @@ export const checkoutResponse = (id, action) => {
       "cache-control": "no-store",
     },
   });
+};
+
+const CART_SCRIPT_PATH = "/_archival/cart.js";
+const CART_CHECKOUT_PATH = "/_archival/checkout";
+const CHECKOUT_MAX_COUNTRIES = 250;
+
+const isRecord = (value) =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** The site as the browser that made a request addresses it. */
+const siteOrigin = (headers) => {
+  const host = headers["x-forwarded-host"] ?? headers.host;
+  const origin = URL.canParse(headers.origin ?? "")
+    ? new URL(headers.origin)
+    : null;
+  return origin?.host === host ? origin.origin : `http://${host}`;
+};
+
+const onSite = (value, origin) => {
+  if (!URL.canParse(value, origin)) return null;
+  const url = new URL(value, origin);
+  return url.origin === origin ? url : null;
+};
+
+/** The page the buyer left, without the checkout an earlier return left on it. */
+const pageLeft = (referer, origin) => {
+  const page = (referer && onSite(referer, origin)) || new URL("/", origin);
+  page.searchParams.delete("checkout");
+  page.hash = "";
+  return page.href;
+};
+
+/**
+ * The checkout a site with a payment account answers for a cart that names no
+ * carrier. Anyone can post to it, so it sells only the account's own variants
+ * at the account's prices, and returns the buyer to a path on the site: the
+ * page they left, unless the body names another.
+ */
+const cartCheckout = (posted, origin, referer) => {
+  const refuse = (status, error) => Response.json({ error }, { status });
+  let body = null;
+  try {
+    body = JSON.parse(posted.toString("utf-8"));
+  } catch {
+    // Refused below, as the body it is.
+  }
+  if (!isRecord(body)) {
+    return refuse(400, "A checkout is a JSON object with items");
+  }
+  if (
+    Array.isArray(body.items) &&
+    body.items.some(
+      (item) =>
+        !isRecord(item) || typeof item.variant !== "string" || !item.variant,
+    )
+  ) {
+    return refuse(400, "Every item needs the id of a variant the site sells");
+  }
+  const urls = {
+    successUrl: pageLeft(referer, origin),
+    cancelUrl: pageLeft(referer, origin),
+  };
+  for (const field of ["successUrl", "cancelUrl"]) {
+    const sitePath = body[field];
+    if (sitePath == null) continue;
+    const url =
+      typeof sitePath === "string" && sitePath.startsWith("/")
+        ? onSite(sitePath, origin)
+        : null;
+    if (!url) {
+      return refuse(400, `${field} must be a path on this site`);
+    }
+    urls[field] = url.href;
+  }
+  if (body.shipping != null) {
+    if (!isRecord(body.shipping)) {
+      return refuse(400, "shipping must be an object");
+    }
+    const countries = body.shipping.countries ?? [];
+    if (
+      !Array.isArray(countries) ||
+      countries.length > CHECKOUT_MAX_COUNTRIES ||
+      countries.some(
+        (country) =>
+          typeof country !== "string" || !/^[A-Za-z]{2}$/.test(country),
+      )
+    ) {
+      return refuse(
+        400,
+        "shipping.countries must be a list of two-letter country codes",
+      );
+    }
+  }
+  const made = createCheckout(
+    {
+      items: Array.isArray(body.items)
+        ? body.items.map(({ variant, quantity }) => ({ variant, quantity }))
+        : body.items,
+      ...urls,
+    },
+    "The cart",
+  );
+  if (!made.ok) {
+    const { ok, status, ...refusal } = made;
+    return Response.json(refusal, { status });
+  }
+  return Response.json({ url: made.url, checkout: made.id });
+};
+
+/**
+ * Answers what a site with a payment account serves for its cart: the script
+ * that sets `window.archivalCart`, and the checkout that script posts its
+ * lines to when the page names no carrier. Null for anything else, and for a
+ * run with no payment account, where both paths are the site's own.
+ */
+export const cartResponse = (pathname, method, headers, body) => {
+  if (pathname !== CART_SCRIPT_PATH && pathname !== CART_CHECKOUT_PATH) {
+    return null;
+  }
+  if (!localPayments().account) {
+    return null;
+  }
+  if (pathname === CART_CHECKOUT_PATH) {
+    return method === "POST"
+      ? cartCheckout(body, siteOrigin(headers), headers.referer ?? null)
+      : Response.json(
+          { error: "method_not_allowed" },
+          { status: 405, headers: { allow: "POST" } },
+        );
+  }
+  if (method !== "GET" && method !== "HEAD") {
+    return new Response(null, { status: 405, headers: { allow: "GET, HEAD" } });
+  }
+  return new Response(
+    method === "HEAD" ? null : readFileSync(path.join(HERE, "cart.js")),
+    {
+      headers: {
+        "content-type": "text/javascript; charset=utf-8",
+        "cache-control": "no-cache",
+      },
+    },
+  );
 };
 
 const CARRIER_CALLS = new Map([
@@ -1336,6 +1493,17 @@ const server = http.createServer(async (req, res) => {
     const checkout = CHECKOUT_PATH.exec(path);
     if (checkout && req.method === "GET") {
       return send(res, checkoutResponse(checkout[1], checkout[2]));
+    }
+    if (path === CART_SCRIPT_PATH || path === CART_CHECKOUT_PATH) {
+      const cart = cartResponse(
+        path,
+        req.method,
+        req.headers,
+        await readBody(req),
+      );
+      if (cart) {
+        return send(res, cart);
+      }
     }
     const route = CARRIER_ROUTE.exec(path);
     if (!route) {

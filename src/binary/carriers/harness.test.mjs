@@ -9,6 +9,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -18,6 +19,7 @@ import test from "node:test";
 import {
   buildAndLoad,
   carrierApiVersion,
+  cartResponse,
   checkoutResponse,
   closeDatabases,
   emailPage,
@@ -428,6 +430,176 @@ test("a local checkout is paid on a page of the harness, which takes its stock",
     site.payments.checkout.get("co_unknown"),
     /not a checkout this site made/,
   );
+});
+
+const SHOP = "http://localhost:1234";
+
+const cartCheckout = (body, headers = {}) =>
+  cartResponse(
+    "/_archival/checkout",
+    "POST",
+    { "x-forwarded-host": "localhost:1234", origin: SHOP, ...headers },
+    Buffer.from(typeof body === "string" ? body : JSON.stringify(body)),
+  );
+
+test("a run with no payment account leaves the cart's paths to the site", () => {
+  assert.equal(cartResponse("/_archival/cart.js", "GET", {}, null), null);
+  assert.equal(cartCheckout({ items: [] }), null);
+});
+
+test("a run with a payment account serves the cart script", async (t) => {
+  await paymentsSite(t, PAYMENTS);
+  const script = cartResponse("/_archival/cart.js", "GET", {}, null);
+  assert.equal(script.status, 200);
+  assert.equal(
+    script.headers.get("content-type"),
+    "text/javascript; charset=utf-8",
+  );
+  const source = await script.text();
+  assert.equal(
+    source,
+    readFileSync(new URL("./cart.js", import.meta.url), "utf-8"),
+  );
+  const window = {
+    localStorage: { getItem: () => null },
+    location: { search: "" },
+    addEventListener: () => {},
+  };
+  new Function("window", source)(window);
+  assert.deepEqual(window.archivalCart.items(), []);
+
+  const head = cartResponse("/_archival/cart.js", "HEAD", {}, null);
+  assert.equal(head.status, 200);
+  assert.equal(await head.text(), "");
+  assert.equal(cartResponse("/_archival/cart.js", "POST", {}, null).status, 405);
+  assert.equal(cartResponse("/_archival/cart", "GET", {}, null), null);
+});
+
+test("the cart's checkout returns the buyer to the page they left", async (t) => {
+  const site = await paymentsSite(t, PAYMENTS);
+  const answer = cartCheckout(
+    { items: [{ variant: "price_last", quantity: 1 }] },
+    { referer: `${SHOP}/shop?size=a5&checkout=co_earlier#notebook` },
+  );
+  assert.equal(answer.status, 200);
+  const { checkout, ...rest } = await answer.json();
+  assert.match(checkout, /^co_/);
+  assert.deepEqual(Object.keys(rest), ["url"]);
+  assert.equal((await site.payments.checkout.get(checkout)).amountTotal, 900);
+
+  assert.equal(
+    checkoutResponse(checkout, "/cancel").headers.get("location"),
+    `${SHOP}/shop?size=a5`,
+  );
+  assert.equal(
+    checkoutResponse(checkout, "/pay").headers.get("location"),
+    `${SHOP}/shop?size=a5&checkout=${checkout}`,
+  );
+  const [last] = await site.payments.variants(["price_last"]);
+  assert.equal(last.stock, 0);
+
+  const returnsTo = async (body, headers) => {
+    const made = await cartCheckout(
+      { items: [{ variant: "price_pocket", quantity: 1 }], ...body },
+      headers,
+    ).json();
+    return [
+      checkoutResponse(made.checkout, "/pay").headers.get("location"),
+      checkoutResponse(made.checkout, "/cancel").headers.get("location"),
+    ];
+  };
+  const [paid, cancelled] = await returnsTo(
+    { successUrl: "/thanks", cancelUrl: "/cart?from=checkout" },
+    { referer: `${SHOP}/shop` },
+  );
+  assert.match(paid, /^http:\/\/localhost:1234\/thanks\?checkout=co_/);
+  assert.equal(cancelled, `${SHOP}/cart?from=checkout`);
+  for (const headers of [{}, { referer: "https://elsewhere.test/shop" }]) {
+    const [home, back] = await returnsTo({}, headers);
+    assert.match(home, /^http:\/\/localhost:1234\/\?checkout=co_/);
+    assert.equal(back, `${SHOP}/`);
+  }
+  const [tunnelled] = await returnsTo(
+    {},
+    {
+      "x-forwarded-host": "shop.tunnel.test",
+      origin: "https://shop.tunnel.test",
+      referer: "https://shop.tunnel.test/shop",
+    },
+  );
+  assert.match(tunnelled, /^https:\/\/shop\.tunnel\.test\/shop\?checkout=co_/);
+});
+
+test("the cart's checkout sells only what the payment account sells", async (t) => {
+  await paymentsSite(t, PAYMENTS);
+  const refused = async (body, headers) => {
+    const answer = cartCheckout(body, headers);
+    return [answer.status, await answer.json()];
+  };
+  const pocket = [{ variant: "price_pocket", quantity: 1 }];
+  assert.deepEqual(await refused("not json"), [
+    400,
+    { error: "A checkout is a JSON object with items" },
+  ]);
+  assert.deepEqual(await refused({}), [
+    400,
+    { error: "items must be a non-empty list" },
+  ]);
+  for (const item of [
+    { name: "Tip", amount: 100, quantity: 1 },
+    { variant: "", quantity: 1 },
+    "price_pocket",
+  ]) {
+    assert.deepEqual(await refused({ items: [...pocket, item] }), [
+      400,
+      { error: "Every item needs the id of a variant the site sells" },
+    ]);
+  }
+  assert.deepEqual(
+    await refused({ items: [{ variant: "price_pocket", quantity: 0 }] }),
+    [400, { error: "items[0].quantity must be a whole number of at least 1" }],
+  );
+  for (const successUrl of ["https://elsewhere.test/", "//elsewhere.test/", "thanks"]) {
+    assert.deepEqual(await refused({ items: pocket, successUrl }), [
+      400,
+      { error: "successUrl must be a path on this site" },
+    ]);
+  }
+  assert.deepEqual(await refused({ items: pocket, cancelUrl: 1 }), [
+    400,
+    { error: "cancelUrl must be a path on this site" },
+  ]);
+  assert.deepEqual(
+    await refused({ items: pocket, shipping: { countries: ["USA"] } }),
+    [
+      400,
+      { error: "shipping.countries must be a list of two-letter country codes" },
+    ],
+  );
+  assert.equal(
+    cartCheckout({ items: pocket, shipping: { countries: ["us"] } }).status,
+    200,
+  );
+  assert.deepEqual(
+    await refused({ items: [{ variant: "price_gone", quantity: 1 }] }),
+    [
+      422,
+      {
+        error:
+          "price_gone is not a variant this site's payment account sells",
+      },
+    ],
+  );
+  assert.deepEqual(
+    await refused({
+      items: [...pocket, { variant: "price_last", quantity: 2 }],
+    }),
+    [409, { error: "out_of_stock", outOfStock: ["price_last"] }],
+  );
+
+  const get = cartResponse("/_archival/checkout", "GET", {}, null);
+  assert.equal(get.status, 405);
+  assert.equal(get.headers.get("allow"), "POST");
 });
 
 test("site.sql keeps what it is given in its database file", sqlite, async () => {

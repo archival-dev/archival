@@ -103,9 +103,19 @@ mod carrier_tests {
         }
 
         fn spawn(root: PathBuf) -> Self {
+            Self::spawn_with_payments(root, None)
+        }
+
+        /// `payments` is the file the run is told its payment account is in.
+        fn spawn_with_payments(root: PathBuf, payments: Option<&Path>) -> Self {
             assert_binary_has_carriers();
             let port = free_port();
-            let mut child = Command::new(env!("CARGO_BIN_EXE_archival"))
+            let mut command = Command::new(env!("CARGO_BIN_EXE_archival"));
+            match payments {
+                Some(file) => command.env("ARCHIVAL_PAYMENTS", file),
+                None => command.env_remove("ARCHIVAL_PAYMENTS"),
+            };
+            let mut child = command
                 .args(["run", &root.to_string_lossy(), "--port", &port.to_string()])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -315,6 +325,90 @@ mod carrier_tests {
                 "payments"
             ])
         );
+    }
+
+    #[test]
+    fn a_run_with_no_payment_account_serves_no_cart() {
+        if !node_ok() {
+            return;
+        }
+        let server = DevServer::start(site_copy());
+        assert_eq!(server.get("/_archival/cart.js").status(), 404);
+        assert_eq!(
+            DevServer::client()
+                .post(server.url("/_archival/checkout"))
+                .json(&serde_json::json!({ "items": [] }))
+                .send()
+                .unwrap()
+                .status(),
+            404,
+            "both paths are the site's own, which has neither"
+        );
+    }
+
+    #[test]
+    fn a_run_with_a_payment_account_serves_the_cart_and_its_checkout() {
+        if !node_ok() {
+            return;
+        }
+        let root = site_copy();
+        // The cart needs no carrier of the site's.
+        fs::remove_dir_all(root.join("carriers")).unwrap();
+        let payments = root.join("payments.json");
+        fs::write(
+            &payments,
+            serde_json::json!({
+                "account": { "name": "Wildflower Press" },
+                "catalog": { "items": [{
+                    "id": "prod_notebook",
+                    "name": "Notebook",
+                    "variants": [{ "id": "price_last", "amount": 900, "currency": "usd", "stock": 1 }],
+                }] },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let server = DevServer::spawn_with_payments(root, Some(&payments));
+        server.wait_until_listening();
+        let script = server.get_until("/_archival/cart.js", "archivalCart");
+        assert!(script.contains("/_archival/checkout"));
+
+        let client = DevServer::client();
+        let checkout = |quantity: u64| {
+            client
+                .post(server.url("/_archival/checkout"))
+                .header("referer", server.url("/shop?size=a5#notebook"))
+                .json(&serde_json::json!({
+                    "items": [{ "variant": "price_last", "quantity": quantity }],
+                }))
+                .send()
+                .unwrap()
+        };
+        let short = checkout(2);
+        assert_eq!(short.status(), 409);
+        assert_eq!(
+            DevServer::json(short),
+            serde_json::json!({ "error": "out_of_stock", "outOfStock": ["price_last"] })
+        );
+
+        let made = checkout(1);
+        assert_eq!(made.status(), 200);
+        let made = DevServer::json(made);
+        let id = made["checkout"].as_str().unwrap();
+        let page = made["url"].as_str().unwrap();
+        assert!(page.ends_with(&format!("/__payments/{}", id)), "{}", page);
+        let shown = client.get(page).send().unwrap();
+        assert_eq!(shown.status(), 200);
+        assert!(shown.text().unwrap().contains("Notebook"));
+
+        let paid = client.get(format!("{}/pay", page)).send().unwrap();
+        assert_eq!(paid.status(), 302);
+        assert_eq!(
+            paid.headers()["location"],
+            server.url(&format!("/shop?size=a5&checkout={}", id)),
+            "the buyer returns to the page they left, on the host they were on"
+        );
+        assert_eq!(checkout(1).status(), 409, "paying took the last one");
     }
 
     #[test]
