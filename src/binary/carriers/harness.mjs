@@ -21,6 +21,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
@@ -707,6 +708,366 @@ const makeInteractions = (name) => {
   });
 };
 
+/**
+ * What a local run sells: the file `ARCHIVAL_PAYMENTS` names, in the shape a
+ * deployed carrier's `site.payments` answers (`account`, and `catalog.items`
+ * holding each product with its variants). Without one, a local run reads as
+ * a site with no payment account connected. Read again whenever it changes,
+ * so stock a test took is put back by saving the file.
+ */
+let paymentsFile = { path: null, mtimeMs: 0, account: null, products: [] };
+
+const localPayments = () => {
+  const file = process.env.ARCHIVAL_PAYMENTS;
+  if (!file) {
+    return { account: null, products: [] };
+  }
+  let mtimeMs;
+  try {
+    mtimeMs = statSync(file).mtimeMs;
+  } catch {
+    throw new Error(`ARCHIVAL_PAYMENTS names ${file}, which cannot be read`);
+  }
+  if (paymentsFile.path !== file || paymentsFile.mtimeMs !== mtimeMs) {
+    let parsed;
+    try {
+      parsed = JSON.parse(readFileSync(file, "utf-8"));
+    } catch (e) {
+      throw new Error(`${file} is not JSON: ${e.message}`);
+    }
+    const products = Array.isArray(parsed?.catalog?.items)
+      ? parsed.catalog.items
+      : [];
+    const currency =
+      products.flatMap((product) => product.variants ?? [])[0]?.currency ??
+      "usd";
+    paymentsFile = {
+      path: file,
+      mtimeMs,
+      account: {
+        provider: "stripe",
+        name: "Local payments",
+        livemode: false,
+        currency,
+        ...(parsed?.account ?? {}),
+      },
+      products: products.map((product) => ({
+        description: null,
+        images: [],
+        metadata: {},
+        ...product,
+        variants: (product.variants ?? []).map((variant) => ({
+          name: null,
+          sku: null,
+          recurring: null,
+          stock: null,
+          available: true,
+          ...variant,
+          product: product.id,
+        })),
+      })),
+    };
+  }
+  return paymentsFile;
+};
+
+/** id -> a checkout a carrier started, kept until this process exits. */
+const checkouts = new Map();
+
+const CHECKOUT_PATH = /^\/__payments\/(co_[0-9a-f-]{36})(\/pay|\/cancel)?$/;
+
+const checkoutUrl = (id) => {
+  const address = server.listening ? server.address() : null;
+  return address ? `http://127.0.0.1:${address.port}/__payments/${id}` : null;
+};
+
+const CHECKOUT_MAX_ITEMS = 100;
+
+/**
+ * Builds the payments facade, which the carrier calls `name`. Lookups answer
+ * from the local file, and a checkout is refused as a deployed one is, then
+ * opens as a page of this process with a button that pays it and one that
+ * backs out, instead of at a payment provider.
+ */
+const makePayments = (name) => {
+  const idList = (method, ids) => {
+    if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string")) {
+      throw new Error(`${name}.${method} takes a list of ids`);
+    }
+    return ids;
+  };
+  const variantOf = (id) =>
+    localPayments()
+      .products.flatMap((product) => product.variants)
+      .find((variant) => variant.id === id) ?? null;
+  const fail = (method, message, outOfStock) => {
+    const error = new Error(`${name}.${method} failed: ${message}`);
+    if (outOfStock) {
+      error.outOfStock = outOfStock;
+    }
+    return error;
+  };
+  return Object.freeze({
+    account: async () => localPayments().account,
+    catalog: async (page) => {
+      const products = [...localPayments().products].sort((a, b) =>
+        a.id < b.id ? -1 : 1,
+      );
+      const limit = Math.min(Math.max(1, page?.limit ?? 20), 100);
+      const start = page?.cursor
+        ? products.findIndex((product) => product.id > page.cursor)
+        : 0;
+      const items = start < 0 ? [] : products.slice(start, start + limit);
+      const more = start >= 0 && start + limit < products.length;
+      return {
+        items,
+        total: products.length,
+        next: more ? items.at(-1).id : null,
+      };
+    },
+    products: async (ids) =>
+      idList("products", ids).map(
+        (id) =>
+          localPayments().products.find((product) => product.id === id) ??
+          null,
+      ),
+    variants: async (ids) => idList("variants", ids).map(variantOf),
+    checkout: Object.freeze({
+      create: async (checkout) => {
+        const method = "checkout.create";
+        const { account } = localPayments();
+        if (!account) {
+          throw fail(method, "This site has no payment provider connected.");
+        }
+        const items = checkout?.items;
+        if (
+          !Array.isArray(items) ||
+          items.length === 0 ||
+          items.length > CHECKOUT_MAX_ITEMS
+        ) {
+          throw fail(method, "items must be a non-empty list");
+        }
+        for (const field of ["successUrl", "cancelUrl"]) {
+          const value = checkout[field];
+          if (
+            (field === "successUrl" || value != null) &&
+            (typeof value !== "string" || !URL.canParse(value))
+          ) {
+            throw fail(method, `${field} must be a url`);
+          }
+        }
+        if (checkout.idempotencyKey) {
+          const made = [...checkouts.values()].find(
+            (other) => other.idempotencyKey === checkout.idempotencyKey,
+          );
+          if (made) {
+            return { id: made.id, url: checkoutUrl(made.id) };
+          }
+        }
+        const lines = [];
+        const short = [];
+        for (const [i, item] of items.entries()) {
+          if (!Number.isInteger(item?.quantity) || item.quantity < 1) {
+            throw fail(
+              method,
+              `items[${i}].quantity must be a whole number of at least 1`,
+            );
+          }
+          if (typeof item.variant === "string") {
+            const variant = variantOf(item.variant);
+            if (!variant) {
+              throw fail(
+                method,
+                `${item.variant} is not a variant this site's payment account sells`,
+              );
+            }
+            if (variant.amount == null) {
+              throw fail(
+                method,
+                `${item.variant} has no fixed price, so it cannot be put in a checkout`,
+              );
+            }
+            if (
+              !variant.available ||
+              (variant.stock != null && variant.stock < item.quantity)
+            ) {
+              short.push(variant.id);
+            }
+            lines.push({
+              variant: variant.id,
+              name: [
+                localPayments().products.find(
+                  (product) => product.id === variant.product,
+                )?.name,
+                variant.name,
+              ]
+                .filter(Boolean)
+                .join(" - "),
+              amount: variant.amount,
+              currency: variant.currency,
+              quantity: item.quantity,
+            });
+          } else if (
+            typeof item.name === "string" &&
+            item.name.trim() &&
+            Number.isInteger(item.amount) &&
+            item.amount >= 1
+          ) {
+            lines.push({
+              variant: null,
+              name: item.name.trim(),
+              amount: item.amount,
+              currency: account.currency,
+              quantity: item.quantity,
+            });
+          } else {
+            throw fail(
+              method,
+              `items[${i}] needs a variant, or a name and an amount`,
+            );
+          }
+        }
+        if (short.length) {
+          throw fail(method, "out_of_stock", short);
+        }
+        const id = `co_${randomUUID()}`;
+        const successUrl = new URL(checkout.successUrl);
+        successUrl.searchParams.set("checkout", id);
+        checkouts.set(id, {
+          id,
+          status: "open",
+          lines,
+          currency: lines[0].currency,
+          successUrl: successUrl.href,
+          cancelUrl: checkout.cancelUrl ?? null,
+          customerEmail: checkout.customerEmail ?? null,
+          idempotencyKey: checkout.idempotencyKey ?? null,
+        });
+        const url = checkoutUrl(id);
+        console.log(`[carrier] ${name} started a checkout: ${url}`);
+        return { id, url };
+      },
+      get: async (id) => {
+        const checkout = checkouts.get(id);
+        if (!checkout) {
+          throw fail("checkout.get", "That is not a checkout this site made");
+        }
+        return {
+          id,
+          status: checkout.status,
+          amountTotal: checkoutTotal(checkout),
+          currency: checkout.currency,
+          customerEmail: checkout.customerEmail,
+        };
+      },
+    }),
+  });
+};
+
+const checkoutTotal = (checkout) =>
+  checkout.lines.reduce((sum, line) => sum + line.amount * line.quantity, 0);
+
+const money = (amount, currency) => {
+  try {
+    const format = new Intl.NumberFormat("en", {
+      style: "currency",
+      currency: currency.toUpperCase(),
+    });
+    const digits = format.resolvedOptions().maximumFractionDigits;
+    return format.format(amount / 10 ** digits);
+  } catch {
+    return `${amount} ${currency}`;
+  }
+};
+
+/** The page that stands in for a provider's checkout in a local run. */
+export const checkoutPage = (checkout) => `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local checkout</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 32rem; margin: 3rem auto; padding: 0 1rem; color: #1a1a1a; }
+  .note { background: #fff7d6; border: 1px solid #e6d27a; border-radius: 6px; padding: .75rem 1rem; }
+  table { width: 100%; border-collapse: collapse; margin: 1.5rem 0; }
+  td { padding: .4rem 0; border-bottom: 1px solid #e5e5e5; }
+  td:last-child { text-align: right; }
+  .total td { font-weight: 600; border-bottom: 0; }
+  .actions { display: flex; gap: .75rem; }
+  a.button { padding: .6rem 1.2rem; border-radius: 6px; text-decoration: none; border: 1px solid #1a1a1a; color: #1a1a1a; }
+  a.pay { background: #1a1a1a; color: #fff; }
+</style>
+</head>
+<body>
+<h1>Local checkout</h1>
+<p class="note">This page stands in for your payment provider while <code>archival run</code> is running. Nothing is charged.</p>
+${
+  checkout.status === "open"
+    ? ""
+    : `<p>This checkout is ${escapeHtml(checkout.status)}.</p>`
+}
+<table>
+${checkout.lines
+  .map(
+    (line) =>
+      `<tr><td>${escapeHtml(line.name)} &times; ${line.quantity}</td><td>${escapeHtml(money(line.amount * line.quantity, line.currency))}</td></tr>`,
+  )
+  .join("\n")}
+<tr class="total"><td>Total</td><td>${escapeHtml(money(checkoutTotal(checkout), checkout.currency))}</td></tr>
+</table>
+${
+  checkout.status === "open"
+    ? `<div class="actions"><a class="button pay" href="/__payments/${checkout.id}/pay">Pay</a>${
+        checkout.cancelUrl
+          ? `<a class="button" href="/__payments/${checkout.id}/cancel">Cancel</a>`
+          : ""
+      }</div>`
+    : ""
+}
+</body>
+</html>
+`;
+
+/** Answers the local checkout page, and what its two buttons do. */
+export const checkoutResponse = (id, action) => {
+  const checkout = checkouts.get(id);
+  if (!checkout) {
+    return new Response(
+      "This checkout is gone: it was kept only while archival run was running.",
+      { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } },
+    );
+  }
+  const redirect = (location) =>
+    new Response(null, { status: 302, headers: { location } });
+  if (action === "/cancel" && checkout.cancelUrl) {
+    return redirect(checkout.cancelUrl);
+  }
+  if (action === "/pay") {
+    if (checkout.status === "open") {
+      checkout.status = "paid";
+      for (const line of checkout.lines) {
+        const variant = localPayments()
+          .products.flatMap((product) => product.variants)
+          .find((candidate) => candidate.id === line.variant);
+        if (variant && variant.stock != null) {
+          variant.stock = Math.max(0, variant.stock - line.quantity);
+          variant.available = variant.stock > 0;
+        }
+      }
+    }
+    return redirect(checkout.successUrl);
+  }
+  return new Response(checkoutPage(checkout), {
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "content-security-policy":
+        "default-src 'none'; style-src 'unsafe-inline'",
+      "cache-control": "no-store",
+    },
+  });
+};
+
 const CARRIER_CALLS = new Map([
   [
     1,
@@ -740,6 +1101,7 @@ const CARRIER_CALLS = new Map([
           webmentions: makeWebmentions("site.webmentions"),
           atproto: makeATProto("site.atproto"),
           interactions: makeInteractions("site.interactions"),
+          payments: makePayments("site.payments"),
         }),
       ),
   ],
@@ -970,6 +1332,10 @@ const server = http.createServer(async (req, res) => {
     const email = EMAIL_PATH.exec(path);
     if (email && req.method === "GET") {
       return send(res, emailResponse(email[1]));
+    }
+    const checkout = CHECKOUT_PATH.exec(path);
+    if (checkout && req.method === "GET") {
+      return send(res, checkoutResponse(checkout[1], checkout[2]));
     }
     const route = CARRIER_ROUTE.exec(path);
     if (!route) {

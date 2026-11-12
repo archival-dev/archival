@@ -18,6 +18,7 @@ import test from "node:test";
 import {
   buildAndLoad,
   carrierApiVersion,
+  checkoutResponse,
   closeDatabases,
   emailPage,
   invokeCarrier,
@@ -223,6 +224,209 @@ test("each carrier API version is called its own way", async () => {
   await assert.rejects(
     site.interactions.reactions({ name: "no path" }),
     /site\.interactions needs a post/,
+  );
+  assert.equal(await site.payments.account(), null);
+  assert.deepEqual(await site.payments.catalog(), {
+    items: [],
+    total: 0,
+    next: null,
+  });
+  assert.deepEqual(await site.payments.variants(["price_a", "price_b"]), [
+    null,
+    null,
+  ]);
+  await assert.rejects(
+    site.payments.products("prod_a"),
+    /site\.payments\.products takes a list of ids/,
+  );
+  await assert.rejects(
+    site.payments.checkout.create({
+      items: [{ name: "Tip", amount: 100, quantity: 1 }],
+      successUrl: "http://localhost:1234/thanks",
+    }),
+    /site\.payments\.checkout\.create failed: This site has no payment provider connected/,
+  );
+});
+
+const paymentsSite = async (t, catalog) => {
+  const dir = mkdtempSync(path.join(tmpdir(), "harness-payments-"));
+  const file = path.join(dir, "payments.json");
+  writeFileSync(file, JSON.stringify(catalog));
+  process.env.ARCHIVAL_PAYMENTS = file;
+  t.after(() => {
+    delete process.env.ARCHIVAL_PAYMENTS;
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const [, , , site] = await invokeCarrier(
+    { carrier: (...args) => args, api: 2 },
+    new URLSearchParams(),
+    null,
+    { objects: {}, siteUrl: "http://localhost:1234" },
+  );
+  return site;
+};
+
+const PAYMENTS = {
+  account: { name: "Wildflower Press", currency: "usd" },
+  catalog: {
+    items: [
+      {
+        id: "prod_b",
+        name: "Print",
+        variants: [{ id: "price_print", amount: 4500, currency: "usd" }],
+      },
+      {
+        id: "prod_a",
+        name: "Notebook",
+        variants: [
+          { id: "price_pocket", name: "Pocket", amount: 1200, currency: "usd" },
+          {
+            id: "price_last",
+            name: "Last one",
+            amount: 900,
+            currency: "usd",
+            stock: 1,
+          },
+          { id: "price_custom", amount: null, currency: "usd" },
+        ],
+      },
+    ],
+  },
+};
+
+test("site.payments sells what the local payments file holds", async (t) => {
+  const site = await paymentsSite(t, PAYMENTS);
+  assert.deepEqual(await site.payments.account(), {
+    provider: "stripe",
+    name: "Wildflower Press",
+    livemode: false,
+    currency: "usd",
+  });
+  const first = await site.payments.catalog({ limit: 1 });
+  assert.equal(first.total, 2);
+  assert.deepEqual(
+    first.items.map(({ id }) => id),
+    ["prod_a"],
+  );
+  assert.equal(first.next, "prod_a");
+  const second = await site.payments.catalog({ limit: 1, cursor: first.next });
+  assert.deepEqual(
+    second.items.map(({ id }) => id),
+    ["prod_b"],
+  );
+  assert.equal(second.next, null);
+  const [pocket, gone] = await site.payments.variants([
+    "price_pocket",
+    "price_gone",
+  ]);
+  assert.deepEqual(pocket, {
+    id: "price_pocket",
+    product: "prod_a",
+    name: "Pocket",
+    sku: null,
+    amount: 1200,
+    currency: "usd",
+    recurring: null,
+    stock: null,
+    available: true,
+  });
+  assert.equal(gone, null);
+  const [print] = await site.payments.products(["prod_b"]);
+  assert.equal(print.name, "Print");
+  assert.deepEqual(print.images, []);
+});
+
+test("a local checkout is refused as a deployed one is", async (t) => {
+  const site = await paymentsSite(t, PAYMENTS);
+  const create = (checkout) =>
+    site.payments.checkout.create({
+      successUrl: "http://localhost:1234/thanks",
+      ...checkout,
+    });
+  await assert.rejects(create({ items: [] }), /items must be a non-empty list/);
+  await assert.rejects(
+    create({ items: [{ variant: "price_gone", quantity: 1 }] }),
+    /price_gone is not a variant/,
+  );
+  await assert.rejects(
+    create({ items: [{ variant: "price_custom", quantity: 1 }] }),
+    /no fixed price/,
+  );
+  await assert.rejects(
+    create({ items: [{ variant: "price_pocket", quantity: 0 }] }),
+    /quantity must be a whole number/,
+  );
+  await assert.rejects(
+    create({
+      items: [{ variant: "price_pocket", quantity: 1 }],
+      successUrl: "not a url",
+    }),
+    /successUrl must be a url/,
+  );
+  await assert.rejects(
+    create({ items: [{ variant: "price_last", quantity: 2 }] }),
+    (error) => {
+      assert.match(error.message, /checkout\.create failed: out_of_stock/);
+      assert.deepEqual(error.outOfStock, ["price_last"]);
+      return true;
+    },
+  );
+});
+
+test("a local checkout is paid on a page of the harness, which takes its stock", async (t) => {
+  const site = await paymentsSite(t, PAYMENTS);
+  const made = await site.payments.checkout.create({
+    items: [
+      { variant: "price_last", quantity: 1 },
+      { name: "Gift wrap", amount: 300, quantity: 2 },
+    ],
+    successUrl: "http://localhost:1234/thanks?from=shop",
+    cancelUrl: "http://localhost:1234/cart",
+    idempotencyKey: "cart-1",
+  });
+  assert.match(made.id, /^co_/);
+  assert.deepEqual(
+    await site.payments.checkout.create({
+      items: [{ variant: "price_pocket", quantity: 1 }],
+      successUrl: "http://localhost:1234/thanks",
+      idempotencyKey: "cart-1",
+    }),
+    made,
+  );
+  assert.deepEqual(await site.payments.checkout.get(made.id), {
+    id: made.id,
+    status: "open",
+    amountTotal: 1500,
+    currency: "usd",
+    customerEmail: null,
+  });
+
+  const page = await checkoutResponse(made.id).text();
+  assert.match(page, /Notebook - Last one &times; 1/);
+  assert.match(page, /Gift wrap &times; 2/);
+  assert.match(page, /\$15\.00/);
+  assert.match(page, new RegExp(`/__payments/${made.id}/pay`));
+
+  const cancelled = checkoutResponse(made.id, "/cancel");
+  assert.equal(cancelled.headers.get("location"), "http://localhost:1234/cart");
+  assert.equal((await site.payments.checkout.get(made.id)).status, "open");
+
+  const paid = checkoutResponse(made.id, "/pay");
+  assert.equal(paid.status, 302);
+  assert.equal(
+    paid.headers.get("location"),
+    `http://localhost:1234/thanks?from=shop&checkout=${made.id}`,
+  );
+  assert.equal((await site.payments.checkout.get(made.id)).status, "paid");
+  const [last] = await site.payments.variants(["price_last"]);
+  assert.equal(last.stock, 0);
+  assert.equal(last.available, false);
+  assert.doesNotMatch(await checkoutResponse(made.id).text(), /\/pay"/);
+
+  assert.equal(checkoutResponse("co_" + "0".repeat(36)).status, 404);
+  await assert.rejects(
+    site.payments.checkout.get("co_unknown"),
+    /not a checkout this site made/,
   );
 });
 
