@@ -170,6 +170,7 @@ impl ContextSignatures {
 
 fn hash_liquid(value: &Value, hasher: &mut seahash::SeaHasher) {
     match value {
+        Value::Custom(custom) => hash_liquid(&custom.to_value(), hasher),
         Value::Nil => hasher.write_u8(0),
         Value::State(state) => {
             hasher.write_u8(1);

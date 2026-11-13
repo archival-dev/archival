@@ -121,6 +121,7 @@ fn collect_uploads_in_value(value: &FieldValue, into: &mut BTreeSet<UploadEntry>
 /// typed against ISO 8601 dates, so the conversion is written out by hand.
 pub(crate) fn liquid_to_json(value: &Value) -> serde_json::Value {
     match value {
+        Value::Custom(custom) => liquid_to_json(&custom.to_value()),
         Value::Nil | Value::State(_) => serde_json::Value::Null,
         Value::Array(values) => {
             serde_json::Value::Array(values.iter().map(liquid_to_json).collect())

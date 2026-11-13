@@ -291,6 +291,116 @@ mod tests {
         }
     }
 
+    mod files {
+        use crate::fields::{DisplayType, FieldConfig, File};
+        use crate::liquid_kstring::KString;
+        use crate::liquid_parser;
+        use liquid::model::Value;
+
+        fn photo() -> File {
+            File::new(
+                "abc123",
+                Some("A photo"),
+                None,
+                "IMG_1122.jpeg",
+                "image/jpeg",
+                DisplayType::Image,
+            )
+        }
+
+        /// `liquid::object!` builds through serde, which flattens a custom
+        /// value into its owned form; a context has to carry the `Value`.
+        fn object(entries: Vec<(&str, Value)>) -> liquid::Object {
+            entries
+                .into_iter()
+                .map(|(k, v)| (KString::from_ref(k), v))
+                .collect()
+        }
+
+        fn render(template: &str, globals: &liquid::Object) -> String {
+            let parser = liquid_parser::build_with_partials(Default::default()).unwrap();
+            liquid_parser::parse(&parser, template)
+                .unwrap()
+                .render(globals)
+                .unwrap()
+        }
+
+        fn photo_globals() -> (liquid::Object, String) {
+            let config = FieldConfig::default();
+            let file = photo();
+            let url = file.url(&config);
+            (object(vec![("photo", file.to_liquid(&config))]), url)
+        }
+
+        #[test]
+        fn a_file_renders_as_its_url() {
+            let (globals, url) = photo_globals();
+            assert_eq!(render("{{ photo }}", &globals), url);
+            assert_eq!(
+                render(r#"<img src="{{ photo }}">"#, &globals),
+                format!(r#"<img src="{url}">"#)
+            );
+        }
+
+        #[test]
+        fn a_files_keys_are_still_reachable() {
+            let (globals, url) = photo_globals();
+            assert_eq!(render("{{ photo.url }}", &globals), url);
+            assert_eq!(render("{{ photo.name }}", &globals), "A photo");
+            assert_eq!(render("{{ photo.mime }}", &globals), "image/jpeg");
+        }
+
+        #[test]
+        fn a_file_behaves_as_its_url_string() {
+            let (globals, url) = photo_globals();
+            assert_eq!(
+                render(r#"{{ photo | append: "?w=100" }}"#, &globals),
+                format!("{url}?w=100")
+            );
+        }
+
+        /// The points a borrow cannot cross.
+        #[test]
+        fn a_file_survives_loops_assigns_and_captures() {
+            let config = FieldConfig::default();
+            let url = photo().url(&config);
+            let globals = object(vec![(
+                "posts",
+                Value::Array(vec![Value::Object(object(vec![(
+                    "image",
+                    photo().to_liquid(&config),
+                )]))]),
+            )]);
+            assert_eq!(
+                render("{% for p in posts %}{{ p.image }}{% endfor %}", &globals),
+                url
+            );
+            assert_eq!(
+                render(
+                    "{% for p in posts %}{{ p.image.url }}{% endfor %}",
+                    &globals
+                ),
+                url
+            );
+            assert_eq!(
+                render("{% assign i = posts[0].image %}{{ i }}", &globals),
+                url
+            );
+        }
+
+        /// Carriers, the objects command and json pages read the tree as data
+        /// and still see a whole file object.
+        #[cfg(feature = "carriers")]
+        #[test]
+        fn a_file_is_still_an_object_as_data() {
+            let (globals, url) = photo_globals();
+            let json =
+                crate::binary::carriers::objects::liquid_to_json(globals.get("photo").unwrap());
+            assert_eq!(json["url"], serde_json::Value::String(url));
+            assert_eq!(json["sha"], serde_json::Value::String("abc123".into()));
+        }
+    }
+
     #[test]
     fn liquid_in_a_value_is_rendered() {
         let globals = liquid::object!({ "body": "hello {{ name }}", "name": "world" });
