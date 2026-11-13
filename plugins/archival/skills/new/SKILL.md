@@ -1,6 +1,6 @@
 ---
 name: new
-description: Build a website with Archival from a short conversation, answer questions about how Archival works, and publish it to a shareable preview URL. Use when someone wants a new website, landing page, portfolio, or brochure site built with Archival, asks what Archival is or how it works, or arrives with an archival.dev preview session. In a folder with a shell it builds the site locally with the archival CLI instead.
+description: Build a website with Archival from a short conversation, answer questions about how Archival works, and publish it to a shareable preview URL. Use when someone wants a new website, landing page, portfolio, or brochure site built with Archival, asks what Archival is or how it works, arrives with an archival.dev preview session, or wants to keep working on a preview an earlier conversation built. In a folder with a shell it builds the site locally with the archival CLI instead.
 ---
 
 # Build an Archival site
@@ -97,8 +97,8 @@ and skip to step 2. Otherwise:
    with `preview` set to the name or link they give you. It returns a link and
    a code.
 2. Send **one** message: the link, the code, ask them to check the code matches
-   on the page before approving, and — in the same message — the questions from
-   step 3. That check is what stops a link someone else sent them from being
+   on the page before approving, and — in the same message, for a new site —
+   the questions from step 3. That check is what stops a link someone else sent them from being
    approved by mistake, and folding the questions in means the wait costs
    nothing.
 3. Then stop and let them reply. Call `archival_await_approval` when they come
@@ -112,9 +112,14 @@ round trip and leaves you with nothing to show. If it has expired, mint another
 and say so in one line. Never invent a session or a preview name.
 
 The session lasts two hours once approved; the `expiresAt` the tools return is
-the session's. The preview itself stays up for weeks, so never tell them it is
-about to expire. When a session runs out, `archival_start_session` with
-`preview` picks the same preview up again.
+the session's. The preview itself stays up for 30 days after its last publish,
+so never tell them it is about to expire. When a session runs out,
+`archival_start_session` with `preview` picks the same preview up again.
+
+**A resumed preview already has a site in it.** Skip steps 2 to 4: read what is
+there with `archival_status` and `archival_read_file`, change only what they
+asked for in those files, publish, and ask what next. Writing a fresh site over
+it throws away their work.
 
 ## 2. Say what Archival is, in two sentences
 
@@ -255,6 +260,7 @@ customer. Work in passes, and publish each one.
   every image, and text that passes contrast against its background.
 - Prefer few, well-made sections over many thin ones.
 - Set the page `<title>` and meta description for every page.
+- Write `pages/404.liquid` in the site's own layout and style.
 
 `reference/conventions.md` is the checklist for both modes: content in objects
 rather than markup, the identity object, `archival_editor.toml`, the pages

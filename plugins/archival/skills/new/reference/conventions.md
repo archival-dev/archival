@@ -144,6 +144,11 @@ build the canonical from `page`: on a templated page that is the template's
 name, so every item would claim one URL. Utility pages add `noindex: true`,
 the one optional argument.
 
+Every site writes its own `pages/404.liquid`, in its layout and style like any
+other page, with `noindex: true` and a link home. Every missing address shows
+it, so a generic 404, or one carried over from a starter or another site, is
+replaced.
+
 ## 7. JSON-LD
 
 A `<script type="application/ld+json">` in the `<head>` of the home page and
@@ -211,7 +216,7 @@ test -f dist/sitemap.xml || echo "no sitemap.xml"
 test -f dist/robots.txt || echo "no robots.txt"
 [ -f dist/feed.xml ] && { grep -q 'rel="alternate"' dist/index.html || echo "feed not linked from layout"; }
 grep -Eq '\.html</loc>|/404</loc>' dist/sitemap.xml 2>/dev/null && echo "sitemap lists .html or 404 URLs"
-[ -f dist/404.html ] && { grep -q 'content="noindex"' dist/404.html || echo "404 page is not noindex"; }
+grep -q 'content="noindex"' dist/404.html 2>/dev/null || echo "no 404 page, or it is not noindex"
 for f in $(find dist -name '*.html'); do
   for needle in '<title>' 'name="description"' 'rel="canonical"' 'property="og:title"' 'lang="en"' 'id="main"'; do
     grep -q "$needle" "$f" || echo "missing $needle: $f"
