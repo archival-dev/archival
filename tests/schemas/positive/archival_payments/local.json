@@ -1,0 +1,15 @@
+{
+  "account": { "name": "Test shop", "currency": "usd" },
+  "catalog": {
+    "items": [
+      {
+        "id": "harbour",
+        "name": "Harbour, 6am",
+        "variants": [
+          { "id": "harbour-a3", "name": "A3", "amount": 6000, "currency": "usd", "stock": 3 },
+          { "id": "harbour-a2", "name": "A2", "amount": 9000, "currency": "usd" }
+        ]
+      }
+    ]
+  }
+}

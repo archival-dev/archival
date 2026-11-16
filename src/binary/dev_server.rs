@@ -1,7 +1,9 @@
 #[cfg(feature = "carriers")]
 use crate::binary::carriers::{objects::build_payload, CarrierOptions, CarrierSupervisor};
-use crate::BuildOptions;
-use crate::{file_system::WatchableFileSystemAPI, file_system_stdlib, server, site::Site};
+use crate::{
+    binary::PAYMENTS_FILE_ENV, file_system::WatchableFileSystemAPI, file_system_stdlib,
+    payments::PaymentsSnapshot, server, site::Site, BuildOptions,
+};
 use anyhow::Result;
 use console::{style, Term};
 use indicatif::ProgressBar;
@@ -9,9 +11,63 @@ use rsa::pkcs8::der::Writer;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{mpsc, Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use std::{process::exit, sync::atomic::Ordering, thread};
 use tracing::warn;
+
+/// The payments file a run names, which its pages render under
+/// `archival.payments`. Without one they read as a site with no payment account.
+#[derive(Default)]
+struct LocalPayments {
+    checked: bool,
+    modified: Option<SystemTime>,
+    snapshot: Option<PaymentsSnapshot>,
+}
+
+impl LocalPayments {
+    /// Reads the file again if it changed since the last call, and says whether
+    /// what pages render changed. A file that does not parse is reported and the
+    /// last good one kept, as an edit in progress often doesn't.
+    fn refresh(&mut self, site: &Site) -> bool {
+        let path = std::env::var_os(PAYMENTS_FILE_ENV)
+            .filter(|file| !file.is_empty())
+            .map(PathBuf::from);
+        let modified = path
+            .as_ref()
+            .and_then(|path| std::fs::metadata(path).and_then(|m| m.modified()).ok());
+        if self.checked && modified == self.modified {
+            return false;
+        }
+        self.checked = true;
+        self.modified = modified;
+        let snapshot = match (path, modified) {
+            (Some(path), Some(_)) => {
+                let read = std::fs::read_to_string(&path)
+                    .map_err(anyhow::Error::from)
+                    .and_then(|json| Ok(PaymentsSnapshot::from_json(&json)?));
+                match read {
+                    Ok(snapshot) => Some(snapshot),
+                    Err(e) => {
+                        println!(
+                            "{} {}",
+                            style(format!("{} is not a payments file:", path.display())).red(),
+                            style(e).red()
+                        );
+                        return false;
+                    }
+                }
+            }
+            _ => None,
+        };
+        self.snapshot = snapshot;
+        self.apply(site);
+        true
+    }
+
+    fn apply(&self, site: &Site) {
+        site.set_payments(self.snapshot.clone());
+    }
+}
 
 #[derive(Debug, Default)]
 pub enum DevServerMode {
@@ -106,6 +162,9 @@ pub fn watch_with(options: DevServerOptions) -> Result<crate::binary::ExitStatus
         })?;
     }
     let initial_sync = site.sync_static_files(&mut fs);
+    let mut payments = LocalPayments::default();
+    payments.refresh(&site);
+    let mut payments_checked = Instant::now();
     let (tx, rx) = mpsc::channel();
     let initial_build = site.build(&mut fs, BuildOptions::default());
     let mut init_message = format!("Watching site: {}", site);
@@ -280,6 +339,11 @@ pub fn watch_with(options: DevServerOptions) -> Result<crate::binary::ExitStatus
                 None => carrier_objects_stale = false,
             }
         }
+        // The file can live outside the watched paths, so it is polled.
+        if Instant::now() - payments_checked > Duration::from_millis(500) {
+            payments_checked = Instant::now();
+            changed |= payments.refresh(&site);
+        }
         // Batch changes every 200ms
         if changed && Instant::now() - last_build > Duration::from_millis(200) {
             last_build = Instant::now();
@@ -311,6 +375,7 @@ pub fn watch_with(options: DevServerOptions) -> Result<crate::binary::ExitStatus
                             reloaded.manifest.uploads_url = Some(uploads_url.to_string());
                         }
                         site = reloaded;
+                        payments.apply(&site);
                         site_reloaded = true;
                     }
                     Err(e) => reload_error = Some(e),

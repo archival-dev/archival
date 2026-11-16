@@ -1,0 +1,192 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://archival.dev/schemas/archival_payments.schema.json",
+  "title": "Archival payments snapshot",
+  "description": "A payment account's catalog, handed to `archival build --payments` and rendered under `archival.payments`, and the file `archival run` reads from `ARCHIVAL_PAYMENTS`. It is what `site.payments.account()` and `site.payments.catalog()` answer; templates read the same keys. A build does not read `stock` or `available`, which a page reads from a carrier when it is viewed.",
+  "type": "object",
+  "properties": {
+    "account": {
+      "description": "The connected account, or null for a site with none connected, which sells nothing whatever `catalog` holds. Whatever an account leaves out is filled in: `provider` `stripe`, `name` `Local payments`, `livemode` false, and the first variant's `currency`.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/account"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "catalog": {
+      "description": "Every product the account sells.",
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/product"
+          }
+        },
+        "total": {
+          "description": "Not read: every product in `items` is the catalog.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "next": {
+          "description": "Not read: every product in `items` is the catalog.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "definitions": {
+    "nullableString": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "account": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "description": "The provider the account is at.",
+          "type": "string",
+          "examples": ["stripe", "square"]
+        },
+        "name": {
+          "$ref": "#/definitions/nullableString"
+        },
+        "livemode": {
+          "description": "False for a provider's test or sandbox account.",
+          "type": "boolean"
+        },
+        "currency": {
+          "description": "Lowercase ISO 4217.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "product": {
+      "type": "object",
+      "required": ["id", "name", "variants"],
+      "properties": {
+        "id": {
+          "description": "The product's id at the provider.",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "$ref": "#/definitions/nullableString"
+        },
+        "images": {
+          "description": "The addresses of its images.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "variants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/variant"
+          }
+        }
+      }
+    },
+    "variant": {
+      "type": "object",
+      "required": ["id", "amount", "currency"],
+      "properties": {
+        "id": {
+          "description": "The variant's id at the provider, which a checkout takes.",
+          "type": "string"
+        },
+        "product": {
+          "description": "Not read: a variant belongs to the product that lists it.",
+          "type": "string"
+        },
+        "name": {
+          "$ref": "#/definitions/nullableString"
+        },
+        "sku": {
+          "$ref": "#/definitions/nullableString"
+        },
+        "amount": {
+          "description": "Its price in the currency's smallest unit, or null for a variant with no fixed price.",
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "currency": {
+          "description": "Lowercase ISO 4217.",
+          "type": "string"
+        },
+        "recurring": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": ["interval"],
+              "properties": {
+                "interval": {
+                  "type": "string",
+                  "examples": ["day", "week", "month", "year"]
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stock": {
+          "description": "How many are left, or null when nothing counts them. `archival run`'s carriers read it; a build does not.",
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "available": {
+          "description": "False to take a variant off sale. `archival run`'s carriers read it; a build does not.",
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

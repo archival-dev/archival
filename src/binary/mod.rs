@@ -4,6 +4,10 @@ pub mod command;
 pub mod config;
 pub mod dev_server;
 
+/// The JSON file of what a local run sells, which `site.payments` answers from
+/// and pages render under `archival.payments`.
+pub(crate) const PAYMENTS_FILE_ENV: &str = "ARCHIVAL_PAYMENTS";
+
 use self::command::{ExitStatus, COMMANDS};
 use anyhow::Result;
 use clap::{command, Command};

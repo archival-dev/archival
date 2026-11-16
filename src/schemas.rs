@@ -19,3 +19,5 @@ pub const ARCHIVAL_EDITOR: &str = include_str!("../archival_editor.schema.json")
 pub const ARCHIVAL_TEMPLATE: &str = include_str!("../archival_template.schema.json");
 /// Schema for the social snapshot `archival build --social` reads.
 pub const ARCHIVAL_SOCIAL: &str = include_str!("../archival_social.schema.json");
+/// Schema for the payments snapshot `archival build --payments` reads.
+pub const ARCHIVAL_PAYMENTS: &str = include_str!("../archival_payments.schema.json");

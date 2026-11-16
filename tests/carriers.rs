@@ -412,6 +412,51 @@ mod carrier_tests {
     }
 
     #[test]
+    fn a_run_renders_its_payments_file_under_the_archival_global() {
+        if !node_ok() {
+            return;
+        }
+        let root = site_copy();
+        fs::remove_dir_all(root.join("carriers")).unwrap();
+        fs::write(
+            root.join("pages/shop.liquid"),
+            "{% if archival.payments.account %}{{ archival.payments.account.name }}: \
+             {{ archival.payments.variants[\"price_last\"].amount }}{% else %}closed{% endif %}\n",
+        )
+        .unwrap();
+        let payments = root.join("payments.json");
+        fs::write(
+            &payments,
+            serde_json::json!({
+                "account": { "name": "Wildflower Press" },
+                "catalog": { "items": [{
+                    "id": "prod_notebook",
+                    "name": "Notebook",
+                    "variants": [{ "id": "price_last", "amount": 900, "currency": "usd" }],
+                }] },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let server = DevServer::spawn_with_payments(root, Some(&payments));
+        server.wait_until_listening();
+        server.get_until("/shop.html", "Wildflower Press: 900");
+        server.get_until("/_archival/cart.js", "archivalCart");
+
+        fs::write(
+            &payments,
+            serde_json::json!({ "account": null, "catalog": { "items": [] } }).to_string(),
+        )
+        .unwrap();
+        server.get_until("/shop.html", "closed");
+        assert_eq!(
+            server.get("/_archival/cart.js").status(),
+            404,
+            "with no account the cart's paths are the site's own"
+        );
+    }
+
+    #[test]
     fn a_carrier_is_built_the_way_a_deploy_builds_it() {
         if !node_ok() {
             return;

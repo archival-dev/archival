@@ -83,6 +83,10 @@
       "type": "boolean",
       "default": true
     },
+    "archival_global_hash": {
+      "description": "written by `archival build`: a hash of the `archival` global the last build rendered, which changes when that global does so a deploy can tell it needs to rebuild. Not meant to be edited by hand",
+      "type": "string"
+    },
     "metadata": {
       "description": "arbitrary string metadata about this site, used by the archival editor and other machine readers of this manifest",
       "type": "object",

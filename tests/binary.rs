@@ -267,13 +267,12 @@ mod binary_tests {
 
     #[test]
     #[traced_test]
-    fn build_renders_a_social_snapshot_and_reports_reading_it() {
+    fn build_renders_a_social_snapshot() {
         let site_path = copy_fixture_site();
         let social = format!(
             "{}/tests/schemas/positive/archival_social/full.json",
             env!("CARGO_MANIFEST_DIR")
         );
-        let report = format!("{site_path}-report.json");
         let build = || {
             archival::binary::binary(
                 get_args(vec![
@@ -283,20 +282,13 @@ mod binary_tests {
                     "test",
                     "--social",
                     &social,
-                    "--report",
-                    &report,
                 ]),
                 None,
             )
         };
-        let reads_social = || -> bool {
-            let report: serde_json::Value =
-                serde_json::from_str(&fs::read_to_string(&report).unwrap()).unwrap();
-            report["readsSocial"].as_bool().unwrap()
-        };
-
         build().unwrap();
-        assert!(!reads_social());
+        let manifest = fs::read_to_string(format!("{site_path}/archival.toml")).unwrap();
+        assert!(manifest.contains("archival_global_hash = \""), "{manifest}");
 
         fs::write(
             format!("{site_path}/pages/social.liquid"),
@@ -304,7 +296,6 @@ mod binary_tests {
         )
         .unwrap();
         build().unwrap();
-        assert!(reads_social());
         assert_eq!(
             fs::read_to_string(format!("{site_path}/dist/social.html"))
                 .unwrap()
@@ -332,7 +323,54 @@ mod binary_tests {
             "{err:#}"
         );
         _ = fs::remove_dir_all(&site_path);
-        _ = fs::remove_file(report);
+        _ = fs::remove_file(broken);
+    }
+
+    #[test]
+    #[traced_test]
+    fn build_renders_a_payments_snapshot() {
+        let site_path = copy_fixture_site();
+        let payments = format!(
+            "{}/tests/schemas/positive/archival_payments/full.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let build = |payments: &str| {
+            archival::binary::binary(
+                get_args(vec![
+                    "build",
+                    &site_path,
+                    "--upload-prefix",
+                    "test",
+                    "--payments",
+                    payments,
+                ]),
+                None,
+            )
+        };
+        fs::write(
+            format!("{site_path}/pages/shop.liquid"),
+            "{{ archival.payments.account.name }}: \
+             {{ archival.payments.variants[\"price_harbour_a3\"].amount }}\n",
+        )
+        .unwrap();
+        build(&payments).unwrap();
+        assert_eq!(
+            fs::read_to_string(format!("{site_path}/dist/shop.html"))
+                .unwrap()
+                .trim(),
+            "Harbour Prints: 6000"
+        );
+
+        let broken = format!("{site_path}-broken-payments.json");
+        fs::write(&broken, "{\"catalog\": {\"items\": [{\"id\": \"a\"}]}}").unwrap();
+        let Err(err) = build(&broken) else {
+            panic!("an invalid payments snapshot built");
+        };
+        assert!(
+            format!("{err:#}").contains("invalid payments snapshot"),
+            "{err:#}"
+        );
+        _ = fs::remove_dir_all(&site_path);
         _ = fs::remove_file(broken);
     }
 

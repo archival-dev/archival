@@ -336,6 +336,99 @@ test("site.payments sells what the local payments file holds", async (t) => {
   const [print] = await site.payments.products(["prod_b"]);
   assert.equal(print.name, "Print");
   assert.deepEqual(print.images, []);
+  const [last, custom] = await site.payments.variants([
+    "price_last",
+    "price_custom",
+  ]);
+  assert.equal(last.available, true);
+  assert.equal(custom.available, false);
+});
+
+test("site.payments answers availability as a provider does", async (t) => {
+  const site = await paymentsSite(t, {
+    catalog: {
+      items: [
+        {
+          id: "prod_a",
+          name: "Notebook",
+          variants: [
+            { id: "sold_out", amount: 900, currency: "usd", stock: 0 },
+            {
+              id: "off_sale",
+              amount: 900,
+              currency: "usd",
+              stock: 5,
+              available: false,
+            },
+          ],
+        },
+      ],
+    },
+  });
+  assert.deepEqual(
+    (await site.payments.variants(["sold_out", "off_sale"])).map(
+      ({ available }) => available,
+    ),
+    [false, false],
+  );
+  await assert.rejects(
+    site.payments.checkout.create({
+      items: [{ variant: "off_sale", quantity: 1 }],
+      successUrl: "http://localhost:1234/thanks",
+    }),
+    (error) => {
+      assert.deepEqual(error.outOfStock, ["off_sale"]);
+      return true;
+    },
+  );
+  assert.deepEqual(await site.payments.account(), {
+    provider: "stripe",
+    name: "Local payments",
+    livemode: false,
+    currency: "usd",
+  });
+});
+
+test("a payments file whose account is null reads as nothing connected", async (t) => {
+  const site = await paymentsSite(t, {
+    account: null,
+    catalog: { items: PAYMENTS.catalog.items },
+  });
+  assert.equal(await site.payments.account(), null);
+  assert.equal((await site.payments.catalog()).total, 0);
+  assert.deepEqual(await site.payments.variants(["price_pocket"]), [null]);
+  await assert.rejects(
+    site.payments.checkout.create({
+      items: [{ variant: "price_pocket", quantity: 1 }],
+      successUrl: "http://localhost:1234/thanks",
+    }),
+    /This site has no payment provider connected/,
+  );
+  await assert.rejects(
+    site.payments.checkout.get("co_anything"),
+    /This site has no payment provider connected/,
+  );
+  assert.equal(cartResponse("/_archival/cart.js", "GET", {}, null), null);
+});
+
+test("a payments file archival build would refuse is refused", async (t) => {
+  for (const [catalog, message] of [
+    [{ account: "stripe" }, /account must be an object, or null/],
+    [{ catalog: { items: [{ id: "a", name: "A" }] } }, /catalog\.items\[0\] needs/],
+    [
+      {
+        catalog: {
+          items: [
+            { id: "a", name: "A", variants: [{ id: "v", currency: "usd" }] },
+          ],
+        },
+      },
+      /catalog\.items\[0\]\.variants\[0\] needs an id, an amount/,
+    ],
+  ]) {
+    const site = await paymentsSite(t, catalog);
+    await assert.rejects(site.payments.catalog(), message);
+  }
 });
 
 test("a local checkout is refused as a deployed one is", async (t) => {
@@ -372,6 +465,60 @@ test("a local checkout is refused as a deployed one is", async (t) => {
       assert.deepEqual(error.outOfStock, ["price_last"]);
       return true;
     },
+  );
+  const pocket = [{ variant: "price_pocket", quantity: 1 }];
+  await assert.rejects(
+    create({ items: [{ variant: "price_pocket", quantity: 10_001 }] }),
+    /quantity must be a whole number from 1 to 10000/,
+  );
+  await assert.rejects(
+    create({ items: [{ name: "x".repeat(251), amount: 100, quantity: 1 }] }),
+    /needs a variant, or a name of at most 250 characters/,
+  );
+  for (const successUrl of [
+    "https://example.com/thanks",
+    "ftp://localhost/thanks",
+  ]) {
+    await assert.rejects(
+      create({ items: pocket, successUrl }),
+      /successUrl and cancelUrl must be urls on this site/,
+    );
+  }
+  await assert.rejects(
+    create({ items: pocket, cancelUrl: "https://example.com/cart" }),
+    /successUrl and cancelUrl must be urls on this site/,
+  );
+  await assert.rejects(
+    create({ items: pocket, metadata: { order: 7 } }),
+    /metadata takes at most 20 strings/,
+  );
+  await assert.rejects(
+    create({ items: pocket, idempotencyKey: "k".repeat(201) }),
+    /idempotencyKey must be a string of at most 200 characters/,
+  );
+  await assert.rejects(
+    create({ items: pocket, shipping: { countries: ["USA"] } }),
+    /shipping\.countries must be a list of two-letter country codes/,
+  );
+  await assert.rejects(
+    site.payments.checkout.create("price_pocket"),
+    /checkout\.create takes the checkout to start/,
+  );
+  await assert.rejects(
+    site.payments.variants(Array.from({ length: 101 }, (_, i) => `v${i}`)),
+    /At most 100 ids can be looked up at once/,
+  );
+  await assert.rejects(site.payments.variants([""]), /ids must be a list of ids/);
+  for (const limit of [0, 101, 1.5]) {
+    await assert.rejects(
+      site.payments.catalog({ limit }),
+      /limit must be a whole number from 1 to 100/,
+    );
+  }
+  await assert.rejects(site.payments.checkout.get(""), /id must be a checkout's id/);
+  assert.match(
+    (await create({ items: pocket, successUrl: "http://127.0.0.1:9/thanks" })).id,
+    /^co_[A-Za-z0-9_-]{22}$/,
   );
 });
 
@@ -557,7 +704,10 @@ test("the cart's checkout sells only what the payment account sells", async (t) 
   }
   assert.deepEqual(
     await refused({ items: [{ variant: "price_pocket", quantity: 0 }] }),
-    [400, { error: "items[0].quantity must be a whole number of at least 1" }],
+    [
+      400,
+      { error: "items[0].quantity must be a whole number from 1 to 10000" },
+    ],
   );
   for (const successUrl of ["https://elsewhere.test/", "//elsewhere.test/", "thanks"]) {
     assert.deepEqual(await refused({ items: pocket, successUrl }), [

@@ -1,7 +1,7 @@
 //! Tests for the JSON Schema files checked in at the repo root
 //! (`archival.schema.json`, `archival_objects.schema.json`,
-//! `archival_editor.schema.json`, `archival_template.schema.json` and
-//! `archival_social.schema.json`).
+//! `archival_editor.schema.json`, `archival_template.schema.json`,
+//! `archival_social.schema.json` and `archival_payments.schema.json`).
 //!
 //! These files are published to <https://archival.dev/schemas/> and registered
 //! with SchemaStore, so editors hand them to users as autocompletion and
@@ -36,7 +36,7 @@ const DRAFT_07: &str = "http://json-schema.org/draft-07/schema#";
 /// Every schema file published from this repo, paired with the constant that
 /// embeds it. Going through [`crate::schemas`] rather than re-reading the files
 /// means these tests check what dependents actually get.
-const SCHEMAS: [(&str, &str); 5] = [
+const SCHEMAS: [(&str, &str); 6] = [
     ("archival.schema.json", crate::schemas::ARCHIVAL),
     (
         "archival_objects.schema.json",
@@ -53,6 +53,10 @@ const SCHEMAS: [(&str, &str); 5] = [
     (
         "archival_social.schema.json",
         crate::schemas::ARCHIVAL_SOCIAL,
+    ),
+    (
+        "archival_payments.schema.json",
+        crate::schemas::ARCHIVAL_PAYMENTS,
     ),
 ];
 
@@ -116,6 +120,7 @@ fn all_manifest_fields() -> Vec<ManifestField> {
         ManifestField::EditorTypes,
         ManifestField::Metadata,
         ManifestField::Sitemap,
+        ManifestField::ArchivalGlobalHash,
     ];
     for field in &all {
         match field {
@@ -136,7 +141,8 @@ fn all_manifest_fields() -> Vec<ManifestField> {
             | ManifestField::UploadsUrl
             | ManifestField::EditorTypes
             | ManifestField::Metadata
-            | ManifestField::Sitemap => {}
+            | ManifestField::Sitemap
+            | ManifestField::ArchivalGlobalHash => {}
         }
     }
     all

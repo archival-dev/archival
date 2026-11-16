@@ -5,6 +5,7 @@ use crate::{
         ExitStatus,
     },
     file_system_stdlib,
+    payments::PaymentsSnapshot,
     site::Site,
     social::SocialSnapshot,
     BuildOptions, ScriptErrors,
@@ -68,7 +69,7 @@ impl BinaryCommand for Command {
                 .required(false)
                 .value_parser(value_parser!(PathBuf)),
         ).arg(
-            arg!(--report <report_file> "Write a JSON report of the build to this file")
+            arg!(--payments <payments_file> "A payments snapshot (archival_payments.schema.json) to render under `archival.payments`")
                 .required(false)
                 .value_parser(value_parser!(PathBuf)),
         ), CommandConfig::archival_site())
@@ -117,12 +118,20 @@ impl BinaryCommand for Command {
                 .with_context(|| format!("invalid social snapshot {}", social_file.display()))?;
             site.set_social(Some(social));
         }
-        site.build(&mut fs, options)?;
-        if let Some(report_file) = args.get_one::<PathBuf>("report") {
-            let report = serde_json::json!({ "readsSocial": site.reads_social() });
-            std::fs::write(report_file, format!("{report}\n"))
-                .with_context(|| format!("failed writing report {}", report_file.display()))?;
+        if let Some(payments_file) = args.get_one::<PathBuf>("payments") {
+            let json = std::fs::read_to_string(payments_file).with_context(|| {
+                format!(
+                    "failed reading payments snapshot {}",
+                    payments_file.display()
+                )
+            })?;
+            let payments = PaymentsSnapshot::from_json(&json).with_context(|| {
+                format!("invalid payments snapshot {}", payments_file.display())
+            })?;
+            site.set_payments(Some(payments));
         }
+        site.build(&mut fs, options)?;
+        site.write_archival_global_hash(&mut fs)?;
         Ok(ExitStatus::Ok)
     }
 }

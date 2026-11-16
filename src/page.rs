@@ -1,8 +1,10 @@
 use crate::liquid_kstring::KStringCow;
 use crate::{
+    archival_global::{ArchivalView, ARCHIVAL_GLOBAL},
     object::{Object, ObjectEntry},
     object_definition::ObjectDefinition,
-    social::{SocialSnapshot, SocialView, ARCHIVAL_GLOBAL},
+    payments::PaymentsSnapshot,
+    social::SocialSnapshot,
     tags::render::RenderContext,
     FieldConfig, ObjectDefinitions, ObjectMap,
 };
@@ -115,6 +117,7 @@ impl fmt::Debug for PageTemplate<'_> {
 pub struct RenderGlobals<'a> {
     pub site_url: Cow<'a, str>,
     pub social: Option<&'a SocialSnapshot>,
+    pub payments: Option<&'a PaymentsSnapshot>,
 }
 
 impl RenderGlobals<'_> {
@@ -168,6 +171,7 @@ impl ContextSignatures {
     }
 }
 
+// Lengths are written as u64 so a signature agrees between wasm32 and 64-bit builds.
 fn hash_liquid(value: &Value, hasher: &mut seahash::SeaHasher) {
     match value {
         Value::Nil => hasher.write_u8(0),
@@ -181,7 +185,7 @@ fn hash_liquid(value: &Value, hasher: &mut seahash::SeaHasher) {
         }
         Value::Array(array) => {
             hasher.write_u8(3);
-            hasher.write_usize(array.len());
+            hasher.write_u64(array.len() as u64);
             for item in array {
                 hash_liquid(item, hasher);
             }
@@ -190,7 +194,7 @@ fn hash_liquid(value: &Value, hasher: &mut seahash::SeaHasher) {
             // liquid's object map is hash-ordered, and two maps holding the same
             // entries can iterate differently, so the signature has to impose an order.
             hasher.write_u8(4);
-            hasher.write_usize(object.len());
+            hasher.write_u64(object.len() as u64);
             let mut keys: Vec<_> = object.keys().collect();
             keys.sort();
             for key in keys {
@@ -203,7 +207,7 @@ fn hash_liquid(value: &Value, hasher: &mut seahash::SeaHasher) {
     }
 }
 
-fn signature(value: &Value) -> u64 {
+pub(crate) fn signature(value: &Value) -> u64 {
     let mut hasher = seahash::SeaHasher::new();
     hash_liquid(value, &mut hasher);
     hasher.finish()
@@ -247,7 +251,7 @@ pub fn build_context(
         context.insert(plural.into(), values);
     }
     globals.inject(&mut context);
-    let archival = SocialView::new(globals.social);
+    let archival = ArchivalView::new(globals.social, globals.payments);
     signatures
         .keys
         .insert(ARCHIVAL_GLOBAL.to_owned(), signature(&archival.to_value()));
@@ -291,7 +295,7 @@ pub fn build_context(
 #[derive(Debug)]
 pub(crate) struct SharedContext {
     pub(crate) values: liquid::Object,
-    pub(crate) archival: SocialView,
+    pub(crate) archival: ArchivalView,
 }
 
 /// The shared context's `objects` entry, under which every object type appears a
@@ -417,7 +421,7 @@ impl liquid::ObjectView for RecordingObjects<'_> {
 struct LayeredContext<'a> {
     overlay: &'a liquid::Object,
     base: &'a liquid::Object,
-    archival: &'a SocialView,
+    archival: &'a ArchivalView,
     reads: &'a ContextReads,
     objects: Option<RecordingObjects<'a>>,
 }
@@ -990,6 +994,7 @@ here is a liquid variable: {{site_url}}
         let globals = RenderGlobals {
             site_url: "https://foo.bar".into(),
             social: None,
+            payments: None,
         };
         let field_config = FieldConfig {
             uploads_url: "https://uploads.foo.bar".into(),
@@ -1051,6 +1056,7 @@ here is a liquid variable: {{site_url}}
         let globals = RenderGlobals {
             site_url: "https://foo.bar".into(),
             social: None,
+            payments: None,
         };
         let field_config = FieldConfig::default();
         let (base_context, _signatures) = build_context(
@@ -1080,6 +1086,7 @@ here is a liquid variable: {{site_url}}
         let globals = RenderGlobals {
             site_url: "https://foo.bar".into(),
             social: None,
+            payments: None,
         };
         let field_config = FieldConfig {
             uploads_url: "https://uploads.foo.bar".into(),
@@ -1135,6 +1142,7 @@ here is a liquid variable: {{site_url}}
         let globals = RenderGlobals {
             site_url: "https://foo.bar".into(),
             social: None,
+            payments: None,
         };
         let field_config = FieldConfig::default();
         let objects_map = ObjectMap::from([("c".to_string(), ObjectEntry::from_vec(objects))]);
@@ -1258,6 +1266,7 @@ here is a liquid variable: {{site_url}}
         let globals = RenderGlobals {
             site_url: "https://foo.bar".into(),
             social: None,
+            payments: None,
         };
         let field_config = FieldConfig::default();
         let definition_map = get_definition_map();

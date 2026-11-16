@@ -262,6 +262,8 @@ pub struct Manifest {
     /// `false` when the manifest sets `sitemap = false`, which stops a build writing
     /// a default sitemap.xml and robots.txt.
     pub sitemap: bool,
+    /// Hash of the `archival` global the last build rendered, written by the build.
+    pub archival_global_hash: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -288,6 +290,7 @@ pub enum ManifestField {
     EditorTypes,
     Metadata,
     Sitemap,
+    ArchivalGlobalHash,
 }
 
 impl ManifestField {
@@ -312,6 +315,7 @@ impl ManifestField {
             ManifestField::EditorTypes => "editor_types",
             ManifestField::Metadata => "metadata",
             ManifestField::Sitemap => "sitemap",
+            ManifestField::ArchivalGlobalHash => "archival_global_hash",
         }
     }
 }
@@ -453,6 +457,7 @@ impl Manifest {
             editor_types: EditorTypes::new(),
             metadata: None,
             sitemap: true,
+            archival_global_hash: None,
         }
     }
     fn is_default(&self, field: &ManifestField) -> bool {
@@ -577,6 +582,9 @@ impl Manifest {
                     manifest.sitemap = value.as_bool().ok_or_else(|| {
                         InvalidManifestError::InvalidField(value, "sitemap".to_string())
                     })?
+                }
+                "archival_global_hash" => {
+                    manifest.archival_global_hash = value.as_str().map(|s| s.to_string())
                 }
                 _ => {}
             }
@@ -703,6 +711,9 @@ impl Manifest {
                 self.scripts_build_dir.to_string_lossy().to_string(),
             )),
             ManifestField::Sitemap => Some(Value::Boolean(self.sitemap)),
+            ManifestField::ArchivalGlobalHash => {
+                self.archival_global_hash.to_owned().map(Value::String)
+            }
             ManifestField::Metadata => self.metadata.as_ref().map(|metadata| {
                 let mut map = toml::map::Map::new();
                 for (key, v) in metadata {
@@ -855,6 +866,7 @@ impl Manifest {
             }
             ManifestField::ScriptsBuildDir => self.scripts_build_dir = PathBuf::from(value),
             ManifestField::Sitemap => self.sitemap = value != "false",
+            ManifestField::ArchivalGlobalHash => self.archival_global_hash = Some(value),
             ManifestField::Metadata => {
                 panic!("Metadata is not modifiable via events")
             }
@@ -897,6 +909,7 @@ impl Manifest {
             ManifestField::EditorTypes,
             ManifestField::Metadata,
             ManifestField::Sitemap,
+            ManifestField::ArchivalGlobalHash,
         ]
     }
 

@@ -14,7 +14,7 @@
 
 import http from "node:http";
 import { spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -712,18 +712,75 @@ const makeInteractions = (name) => {
 /**
  * What a local run sells: the file `ARCHIVAL_PAYMENTS` names, in the shape a
  * deployed carrier's `site.payments` answers (`account`, and `catalog.items`
- * holding each product with its variants). Without one, a local run reads as
- * a site with no payment account connected. With one, the run also serves the
- * cart a site with a payment account gets: its script at /_archival/cart.js,
- * and the checkout that script posts to at /_archival/checkout. Read again
- * whenever it changes, so stock a test took is put back by saving the file.
+ * holding each product with its variants), which `archival build --payments`
+ * reads too. Without one, or with `"account": null`, a local run reads as a
+ * site with no payment account connected. With an account, the run also serves
+ * the cart a site with a payment account gets: its script at
+ * /_archival/cart.js, and the checkout that script posts to at
+ * /_archival/checkout. Read again whenever it changes, so stock a test took is
+ * put back by saving the file.
  */
 let paymentsFile = { path: null, mtimeMs: 0, account: null, products: [] };
+
+const NO_PAYMENTS = Object.freeze({ account: null, products: [] });
+
+const isRecord = (value) =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** Refuses a file `archival build --payments` would refuse. */
+const checkPaymentsFile = (file, parsed) => {
+  const refuse = (message) =>
+    new Error(`${file} is not a payments file: ${message}`);
+  if (!isRecord(parsed)) {
+    throw refuse("it must be a JSON object");
+  }
+  if (parsed.account != null && !isRecord(parsed.account)) {
+    throw refuse("account must be an object, or null for no account");
+  }
+  const items = parsed.catalog?.items ?? [];
+  if (!Array.isArray(items)) {
+    throw refuse("catalog.items must be a list of products");
+  }
+  for (const [i, product] of items.entries()) {
+    if (
+      !isRecord(product) ||
+      typeof product.id !== "string" ||
+      typeof product.name !== "string" ||
+      !Array.isArray(product.variants)
+    ) {
+      throw refuse(`catalog.items[${i}] needs an id, a name and its variants`);
+    }
+    for (const [j, variant] of product.variants.entries()) {
+      if (
+        !isRecord(variant) ||
+        typeof variant.id !== "string" ||
+        !(
+          variant.amount === null ||
+          (Number.isSafeInteger(variant.amount) && variant.amount >= 0)
+        ) ||
+        typeof variant.currency !== "string"
+      ) {
+        throw refuse(
+          `catalog.items[${i}].variants[${j}] needs an id, an amount (null for no fixed price) and a currency`,
+        );
+      }
+    }
+  }
+};
+
+/**
+ * Whether a variant can be bought, as a provider decides it: priced, in stock
+ * or uncounted, and not taken off sale by the file's `available: false`.
+ */
+const isAvailable = (onSale, variant) =>
+  onSale &&
+  variant.amount !== null &&
+  (variant.stock === null || variant.stock > 0);
 
 const localPayments = () => {
   const file = process.env.ARCHIVAL_PAYMENTS;
   if (!file) {
-    return { account: null, products: [] };
+    return NO_PAYMENTS;
   }
   let mtimeMs;
   try {
@@ -738,12 +795,16 @@ const localPayments = () => {
     } catch (e) {
       throw new Error(`${file} is not JSON: ${e.message}`);
     }
-    const products = Array.isArray(parsed?.catalog?.items)
-      ? parsed.catalog.items
-      : [];
+    checkPaymentsFile(file, parsed);
+    if (parsed.account === null) {
+      paymentsFile = { path: file, mtimeMs, ...NO_PAYMENTS };
+      return paymentsFile;
+    }
+    const products = [...(parsed.catalog?.items ?? [])].sort((a, b) =>
+      a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+    );
     const currency =
-      products.flatMap((product) => product.variants ?? [])[0]?.currency ??
-      "usd";
+      products.flatMap((product) => product.variants)[0]?.currency ?? "usd";
     paymentsFile = {
       path: file,
       mtimeMs,
@@ -752,22 +813,24 @@ const localPayments = () => {
         name: "Local payments",
         livemode: false,
         currency,
-        ...(parsed?.account ?? {}),
+        ...(parsed.account ?? {}),
       },
       products: products.map((product) => ({
         description: null,
         images: [],
         metadata: {},
         ...product,
-        variants: (product.variants ?? []).map((variant) => ({
-          name: null,
-          sku: null,
-          recurring: null,
-          stock: null,
-          available: true,
-          ...variant,
-          product: product.id,
-        })),
+        variants: product.variants.map(({ available = true, ...given }) => {
+          const variant = {
+            name: null,
+            sku: null,
+            recurring: null,
+            stock: null,
+            ...given,
+            product: product.id,
+          };
+          return { ...variant, available: isAvailable(available, variant) };
+        }),
       })),
     };
   }
@@ -777,14 +840,218 @@ const localPayments = () => {
 /** id -> a checkout a carrier started, kept until this process exits. */
 const checkouts = new Map();
 
-const CHECKOUT_PATH = /^\/__payments\/(co_[0-9a-f-]{36})(\/pay|\/cancel)?$/;
+const CHECKOUT_PATH = /^\/__payments\/(co_[A-Za-z0-9_-]{22})(\/pay|\/cancel)?$/;
 
 const checkoutUrl = (id) => {
   const address = server.listening ? server.address() : null;
   return address ? `http://127.0.0.1:${address.port}/__payments/${id}` : null;
 };
 
+// The limits a deployed site's payments are held to.
+const PAYMENTS_DEFAULT_PAGE = 20;
+const PAYMENTS_MAX_PAGE = 100;
+const PAYMENTS_MAX_IDS = 100;
 const CHECKOUT_MAX_ITEMS = 100;
+const CHECKOUT_MAX_QUANTITY = 10_000;
+const CHECKOUT_MAX_NAME_LENGTH = 250;
+const CHECKOUT_MAX_URL_LENGTH = 2_000;
+const CHECKOUT_MAX_EMAIL_LENGTH = 320;
+const CHECKOUT_MAX_METADATA_KEYS = 20;
+const CHECKOUT_MAX_METADATA_KEY_LENGTH = 40;
+const CHECKOUT_MAX_METADATA_VALUE_LENGTH = 500;
+const CHECKOUT_MAX_COUNTRIES = 250;
+const CHECKOUT_MAX_IDEMPOTENCY_KEY_LENGTH = 200;
+
+const NOT_CONNECTED = Object.freeze({
+  ok: false,
+  status: 409,
+  error: "This site has no payment provider connected.",
+});
+
+const invalid = (error) => ({ ok: false, status: 400, error });
+
+const wholeNumber = (value, max) =>
+  Number.isInteger(value) && value >= 1 && value <= max;
+
+const optionalString = (value, field, max) => {
+  if (value === undefined || value === null) {
+    return { ok: true, value: null };
+  }
+  return typeof value === "string" && value && value.length <= max
+    ? { ok: true, value }
+    : invalid(`${field} must be a string of at most ${max} characters`);
+};
+
+const parseIds = (ids) => {
+  if (
+    !Array.isArray(ids) ||
+    ids.some((id) => typeof id !== "string" || !id || id.length > 255)
+  ) {
+    return invalid("ids must be a list of ids");
+  }
+  if (ids.length > PAYMENTS_MAX_IDS) {
+    return invalid(`At most ${PAYMENTS_MAX_IDS} ids can be looked up at once`);
+  }
+  return { ok: true, ids };
+};
+
+const parseItems = (items) => {
+  if (!Array.isArray(items) || items.length === 0) {
+    return invalid("items must be a non-empty list");
+  }
+  if (items.length > CHECKOUT_MAX_ITEMS) {
+    return invalid(`A checkout takes at most ${CHECKOUT_MAX_ITEMS} items`);
+  }
+  const parsed = [];
+  for (const [i, item] of items.entries()) {
+    if (!isRecord(item)) {
+      return invalid(`items[${i}] must be an object`);
+    }
+    if (!wholeNumber(item.quantity, CHECKOUT_MAX_QUANTITY)) {
+      return invalid(
+        `items[${i}].quantity must be a whole number from 1 to ${CHECKOUT_MAX_QUANTITY}`,
+      );
+    }
+    if (typeof item.variant === "string" && item.variant) {
+      parsed.push({ variant: item.variant, quantity: item.quantity });
+      continue;
+    }
+    if (
+      typeof item.name !== "string" ||
+      !item.name.trim() ||
+      item.name.length > CHECKOUT_MAX_NAME_LENGTH
+    ) {
+      return invalid(
+        `items[${i}] needs a variant, or a name of at most ${CHECKOUT_MAX_NAME_LENGTH} characters and an amount`,
+      );
+    }
+    if (!wholeNumber(item.amount, Number.MAX_SAFE_INTEGER)) {
+      return invalid(
+        `items[${i}].amount must be a positive whole number in the currency's smallest unit`,
+      );
+    }
+    parsed.push({
+      name: item.name.trim(),
+      amount: item.amount,
+      quantity: item.quantity,
+    });
+  }
+  return { ok: true, items: parsed };
+};
+
+const parseUrl = (value, field) =>
+  typeof value === "string" &&
+  value.length <= CHECKOUT_MAX_URL_LENGTH &&
+  URL.canParse(value)
+    ? { ok: true, url: value }
+    : invalid(`${field} must be a url`);
+
+const parseMetadata = (value) => {
+  if (value === undefined || value === null) {
+    return { ok: true, metadata: {} };
+  }
+  if (!isRecord(value)) {
+    return invalid("metadata must be an object of strings");
+  }
+  const entries = Object.entries(value);
+  if (
+    entries.length > CHECKOUT_MAX_METADATA_KEYS ||
+    entries.some(
+      ([key, entry]) =>
+        !key ||
+        key.length > CHECKOUT_MAX_METADATA_KEY_LENGTH ||
+        typeof entry !== "string" ||
+        entry.length > CHECKOUT_MAX_METADATA_VALUE_LENGTH,
+    )
+  ) {
+    return invalid(
+      `metadata takes at most ${CHECKOUT_MAX_METADATA_KEYS} strings of at most ${CHECKOUT_MAX_METADATA_VALUE_LENGTH} characters, under keys of at most ${CHECKOUT_MAX_METADATA_KEY_LENGTH}`,
+    );
+  }
+  return { ok: true, metadata: value };
+};
+
+const parseShipping = (value) => {
+  if (value === undefined || value === null) {
+    return { ok: true, shipping: null };
+  }
+  if (!isRecord(value)) {
+    return invalid("shipping must be an object");
+  }
+  const countries = value.countries ?? [];
+  if (
+    !Array.isArray(countries) ||
+    countries.length > CHECKOUT_MAX_COUNTRIES ||
+    countries.some(
+      (country) =>
+        typeof country !== "string" || !/^[A-Za-z]{2}$/.test(country),
+    )
+  ) {
+    return invalid(
+      "shipping.countries must be a list of two-letter country codes",
+    );
+  }
+  return {
+    ok: true,
+    shipping: { countries: countries.map((country) => country.toUpperCase()) },
+  };
+};
+
+/** A checkout request as a deployed site parses it, or why it refuses it. */
+const parseCheckout = (body) => {
+  const items = parseItems(body.items);
+  if (!items.ok) return items;
+  const successUrl = parseUrl(body.successUrl, "successUrl");
+  if (!successUrl.ok) return successUrl;
+  const cancelUrl =
+    body.cancelUrl === undefined || body.cancelUrl === null
+      ? null
+      : parseUrl(body.cancelUrl, "cancelUrl");
+  if (cancelUrl && !cancelUrl.ok) return cancelUrl;
+  const customerEmail = optionalString(
+    body.customerEmail,
+    "customerEmail",
+    CHECKOUT_MAX_EMAIL_LENGTH,
+  );
+  if (!customerEmail.ok) return customerEmail;
+  const metadata = parseMetadata(body.metadata);
+  if (!metadata.ok) return metadata;
+  const shipping = parseShipping(body.shipping);
+  if (!shipping.ok) return shipping;
+  const idempotencyKey = optionalString(
+    body.idempotencyKey,
+    "idempotencyKey",
+    CHECKOUT_MAX_IDEMPOTENCY_KEY_LENGTH,
+  );
+  if (!idempotencyKey.ok) return idempotencyKey;
+  return {
+    ok: true,
+    checkout: {
+      items: items.items,
+      successUrl: successUrl.url,
+      cancelUrl: cancelUrl ? cancelUrl.url : null,
+      customerEmail: customerEmail.value,
+      metadata: metadata.metadata,
+      shipping: shipping.shipping,
+      idempotencyKey: idempotencyKey.value,
+    },
+  };
+};
+
+const LOOPBACK_HOST = /^(localhost|127\.0\.0\.1|\[::1\])$|\.localhost$/;
+
+/**
+ * Whether a buyer sent to `value` lands on this site: a deployed site takes
+ * only its own domains, and a local one its own address or this machine.
+ */
+const onLocalSite = (value, siteUrl) => {
+  const url = new URL(value);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    return false;
+  }
+  const site = URL.canParse(siteUrl ?? "") ? new URL(siteUrl) : null;
+  return url.origin === site?.origin || LOOPBACK_HOST.test(url.hostname);
+};
 
 const localVariant = (id) =>
   localPayments()
@@ -794,39 +1061,16 @@ const localVariant = (id) =>
 /**
  * Starts a checkout `by` asked for over the local payments, or says why a
  * deployed site refuses it, with the status its own checkout answers that
- * with.
+ * with. `request` is what `parseCheckout` made of the call.
  */
-const createCheckout = (checkout, by) => {
-  const refuse = (status, error, outOfStock) => ({
-    ok: false,
-    status,
-    error,
-    ...(outOfStock ? { outOfStock } : {}),
-  });
+const createCheckout = (request, by) => {
   const { account, products } = localPayments();
   if (!account) {
-    return refuse(422, "This site has no payment provider connected.");
+    return NOT_CONNECTED;
   }
-  const items = checkout?.items;
-  if (
-    !Array.isArray(items) ||
-    items.length === 0 ||
-    items.length > CHECKOUT_MAX_ITEMS
-  ) {
-    return refuse(400, "items must be a non-empty list");
-  }
-  for (const field of ["successUrl", "cancelUrl"]) {
-    const value = checkout[field];
-    if (
-      (field === "successUrl" || value != null) &&
-      (typeof value !== "string" || !URL.canParse(value))
-    ) {
-      return refuse(400, `${field} must be a url`);
-    }
-  }
-  if (checkout.idempotencyKey) {
+  if (request.idempotencyKey) {
     const made = [...checkouts.values()].find(
-      (other) => other.idempotencyKey === checkout.idempotencyKey,
+      (other) => other.idempotencyKey === request.idempotencyKey,
     );
     if (made) {
       return { ok: true, id: made.id, url: checkoutUrl(made.id) };
@@ -834,77 +1078,73 @@ const createCheckout = (checkout, by) => {
   }
   const lines = [];
   const short = [];
-  for (const [i, item] of items.entries()) {
-    if (!Number.isInteger(item?.quantity) || item.quantity < 1) {
-      return refuse(
-        400,
-        `items[${i}].quantity must be a whole number of at least 1`,
-      );
+  let currency = account.currency;
+  for (const item of request.items) {
+    if (!("variant" in item)) {
+      lines.push({ variant: null, currency: null, ...item });
+      continue;
     }
-    if (typeof item.variant === "string") {
-      const variant = localVariant(item.variant);
-      if (!variant) {
-        return refuse(
-          422,
-          `${item.variant} is not a variant this site's payment account sells`,
-        );
-      }
-      if (variant.amount == null) {
-        return refuse(
-          422,
-          `${item.variant} has no fixed price, so it cannot be put in a checkout`,
-        );
-      }
-      if (
-        !variant.available ||
-        (variant.stock != null && variant.stock < item.quantity)
-      ) {
-        short.push(variant.id);
-      }
-      lines.push({
-        variant: variant.id,
-        name: [
-          products.find((product) => product.id === variant.product)?.name,
-          variant.name,
-        ]
-          .filter(Boolean)
-          .join(" - "),
-        amount: variant.amount,
-        currency: variant.currency,
-        quantity: item.quantity,
-      });
-    } else if (
-      typeof item.name === "string" &&
-      item.name.trim() &&
-      Number.isInteger(item.amount) &&
-      item.amount >= 1
+    const variant = localVariant(item.variant);
+    if (!variant) {
+      return {
+        ok: false,
+        status: 422,
+        error: `${item.variant} is not a variant this site's payment account sells`,
+      };
+    }
+    if (variant.amount === null) {
+      return {
+        ok: false,
+        status: 422,
+        error: `${item.variant} has no fixed price, so it cannot be put in a checkout`,
+      };
+    }
+    if (
+      !variant.available ||
+      (variant.stock !== null && variant.stock < item.quantity)
     ) {
-      lines.push({
-        variant: null,
-        name: item.name.trim(),
-        amount: item.amount,
-        currency: account.currency,
-        quantity: item.quantity,
-      });
-    } else {
-      return refuse(400, `items[${i}] needs a variant, or a name and an amount`);
+      short.push(variant.id);
     }
+    currency ??= variant.currency;
+    lines.push({
+      variant: variant.id,
+      name: [
+        products.find((product) => product.id === variant.product)?.name,
+        variant.name,
+      ]
+        .filter(Boolean)
+        .join(" - "),
+      amount: variant.amount,
+      currency: variant.currency,
+      quantity: item.quantity,
+    });
   }
   if (short.length) {
-    return refuse(409, "out_of_stock", short);
+    return { ok: false, status: 409, error: "out_of_stock", outOfStock: short };
   }
-  const id = `co_${randomUUID()}`;
-  const successUrl = new URL(checkout.successUrl);
+  if (!currency) {
+    return {
+      ok: false,
+      status: 422,
+      error:
+        "This site's payment account names no currency, so a checkout needs at least one variant to be priced in",
+    };
+  }
+  for (const line of lines) {
+    line.currency ??= currency;
+  }
+  const id = `co_${randomBytes(16).toString("base64url")}`;
+  const successUrl = new URL(request.successUrl);
   successUrl.searchParams.set("checkout", id);
   checkouts.set(id, {
     id,
     status: "open",
     lines,
-    currency: lines[0].currency,
+    currency,
     successUrl: successUrl.href,
-    cancelUrl: checkout.cancelUrl ?? null,
-    customerEmail: checkout.customerEmail ?? null,
-    idempotencyKey: checkout.idempotencyKey ?? null,
+    cancelUrl: request.cancelUrl,
+    customerEmail: request.customerEmail,
+    idempotencyKey: request.idempotencyKey,
   });
   const url = checkoutUrl(id);
   console.log(`[carrier] ${by} started a checkout: ${url}`);
@@ -912,34 +1152,46 @@ const createCheckout = (checkout, by) => {
 };
 
 /**
- * Builds the payments facade, which the carrier calls `name`. Lookups answer
- * from the local file, and a checkout is refused as a deployed one is, then
- * opens as a page of this process with a button that pays it and one that
- * backs out, instead of at a payment provider.
+ * Builds the payments facade, which the carrier calls `name`. Every call is
+ * checked and refused as a deployed one is; lookups answer from the local
+ * file, and a checkout opens as a page of this process with a button that
+ * pays it and one that backs out, instead of at a payment provider.
  */
-const makePayments = (name) => {
-  const idList = (method, ids) => {
+const makePayments = (name, siteUrl) => {
+  const fail = (method, refusal) => {
+    const error = new Error(`${name}.${method} failed: ${refusal.error}`);
+    if (refusal.outOfStock) {
+      error.outOfStock = refusal.outOfStock;
+    }
+    return error;
+  };
+  const lookup = (method, find) => async (ids) => {
     if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string")) {
       throw new Error(`${name}.${method} takes a list of ids`);
     }
-    return ids;
-  };
-  const fail = (method, message, outOfStock) => {
-    const error = new Error(`${name}.${method} failed: ${message}`);
-    if (outOfStock) {
-      error.outOfStock = outOfStock;
+    const parsed = parseIds(ids);
+    if (!parsed.ok) {
+      throw fail(method, parsed);
     }
-    return error;
+    return parsed.ids.map(find);
   };
   return Object.freeze({
     account: async () => localPayments().account,
     catalog: async (page) => {
-      const products = [...localPayments().products].sort((a, b) =>
-        a.id < b.id ? -1 : 1,
-      );
-      const limit = Math.min(Math.max(1, page?.limit ?? 20), 100);
-      const start = page?.cursor
-        ? products.findIndex((product) => product.id > page.cursor)
+      const limit = page?.limit ?? PAYMENTS_DEFAULT_PAGE;
+      if (!wholeNumber(limit, PAYMENTS_MAX_PAGE)) {
+        throw fail(
+          "catalog",
+          invalid(`limit must be a whole number from 1 to ${PAYMENTS_MAX_PAGE}`),
+        );
+      }
+      const cursor = optionalString(page?.cursor || null, "cursor", 255);
+      if (!cursor.ok) {
+        throw fail("catalog", cursor);
+      }
+      const { products } = localPayments();
+      const start = cursor.value
+        ? products.findIndex((product) => product.id > cursor.value)
         : 0;
       const items = start < 0 ? [] : products.slice(start, start + limit);
       const more = start >= 0 && start + limit < products.length;
@@ -949,25 +1201,51 @@ const makePayments = (name) => {
         next: more ? items.at(-1).id : null,
       };
     },
-    products: async (ids) =>
-      idList("products", ids).map(
-        (id) =>
-          localPayments().products.find((product) => product.id === id) ??
-          null,
-      ),
-    variants: async (ids) => idList("variants", ids).map(localVariant),
+    products: lookup(
+      "products",
+      (id) =>
+        localPayments().products.find((product) => product.id === id) ?? null,
+    ),
+    variants: lookup("variants", localVariant),
     checkout: Object.freeze({
       create: async (checkout) => {
-        const made = createCheckout(checkout, name);
+        if (!checkout || typeof checkout !== "object") {
+          throw new Error(`${name}.checkout.create takes the checkout to start`);
+        }
+        const parsed = parseCheckout(checkout);
+        if (!parsed.ok) {
+          throw fail("checkout.create", parsed);
+        }
+        const { successUrl, cancelUrl } = parsed.checkout;
+        if (
+          !onLocalSite(successUrl, siteUrl) ||
+          (cancelUrl !== null && !onLocalSite(cancelUrl, siteUrl))
+        ) {
+          throw fail(
+            "checkout.create",
+            invalid(
+              "successUrl and cancelUrl must be urls on this site, as site.url builds them",
+            ),
+          );
+        }
+        const made = createCheckout(parsed.checkout, name);
         if (!made.ok) {
-          throw fail("checkout.create", made.error, made.outOfStock);
+          throw fail("checkout.create", made);
         }
         return { id: made.id, url: made.url };
       },
       get: async (id) => {
+        if (typeof id !== "string" || !id || id.length > 255) {
+          throw fail("checkout.get", invalid("id must be a checkout's id"));
+        }
+        if (!localPayments().account) {
+          throw fail("checkout.get", NOT_CONNECTED);
+        }
         const checkout = checkouts.get(id);
         if (!checkout) {
-          throw fail("checkout.get", "That is not a checkout this site made");
+          throw fail("checkout.get", {
+            error: "That is not a checkout this site made",
+          });
         }
         return {
           id,
@@ -1067,7 +1345,7 @@ export const checkoutResponse = (id, action) => {
         const variant = localVariant(line.variant);
         if (variant && variant.stock != null) {
           variant.stock = Math.max(0, variant.stock - line.quantity);
-          variant.available = variant.stock > 0;
+          variant.available &&= variant.stock > 0;
         }
       }
     }
@@ -1085,11 +1363,6 @@ export const checkoutResponse = (id, action) => {
 
 const CART_SCRIPT_PATH = "/_archival/cart.js";
 const CART_CHECKOUT_PATH = "/_archival/checkout";
-const CHECKOUT_MAX_COUNTRIES = 250;
-
-const isRecord = (value) =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
 /** The site as the browser that made a request addresses it. */
 const siteOrigin = (headers) => {
   const host = headers["x-forwarded-host"] ?? headers.host;
@@ -1155,34 +1428,15 @@ const cartCheckout = (posted, origin, referer) => {
     }
     urls[field] = url.href;
   }
-  if (body.shipping != null) {
-    if (!isRecord(body.shipping)) {
-      return refuse(400, "shipping must be an object");
-    }
-    const countries = body.shipping.countries ?? [];
-    if (
-      !Array.isArray(countries) ||
-      countries.length > CHECKOUT_MAX_COUNTRIES ||
-      countries.some(
-        (country) =>
-          typeof country !== "string" || !/^[A-Za-z]{2}$/.test(country),
-      )
-    ) {
-      return refuse(
-        400,
-        "shipping.countries must be a list of two-letter country codes",
-      );
-    }
+  const parsed = parseCheckout({
+    items: body.items,
+    shipping: body.shipping,
+    ...urls,
+  });
+  if (!parsed.ok) {
+    return refuse(parsed.status, parsed.error);
   }
-  const made = createCheckout(
-    {
-      items: Array.isArray(body.items)
-        ? body.items.map(({ variant, quantity }) => ({ variant, quantity }))
-        : body.items,
-      ...urls,
-    },
-    "The cart",
-  );
+  const made = createCheckout(parsed.checkout, "The cart");
   if (!made.ok) {
     const { ok, status, ...refusal } = made;
     return Response.json(refusal, { status });
@@ -1258,7 +1512,7 @@ const CARRIER_CALLS = new Map([
           webmentions: makeWebmentions("site.webmentions"),
           atproto: makeATProto("site.atproto"),
           interactions: makeInteractions("site.interactions"),
-          payments: makePayments("site.payments"),
+          payments: makePayments("site.payments", current.siteUrl),
         }),
       ),
   ],

@@ -45,7 +45,7 @@ pub fn is_reserved_field(field: &str) -> bool {
 
 /// Names a top-level object may not take, beyond [`RESERVED_FIELDS`]: each would
 /// put the object under a context key a build already fills.
-pub const RESERVED_OBJECT_NAMES: [&str; 1] = [crate::social::ARCHIVAL_GLOBAL];
+pub const RESERVED_OBJECT_NAMES: [&str; 1] = [crate::archival_global::ARCHIVAL_GLOBAL];
 
 /// Whether a top-level object named `name` would shadow a reserved global, under
 /// its own name or, as a list, under its plural.

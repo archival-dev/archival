@@ -1,0 +1,65 @@
+{
+  "account": {
+    "provider": "stripe",
+    "name": "Harbour Prints",
+    "livemode": true,
+    "currency": "usd"
+  },
+  "catalog": {
+    "items": [
+      {
+        "id": "prod_membership",
+        "name": "Membership",
+        "description": null,
+        "images": [],
+        "metadata": {},
+        "variants": [
+          {
+            "id": "price_membership",
+            "product": "prod_membership",
+            "name": "Monthly",
+            "sku": null,
+            "amount": 800,
+            "currency": "usd",
+            "recurring": { "interval": "month" },
+            "stock": null,
+            "available": true
+          }
+        ]
+      },
+      {
+        "id": "prod_harbour",
+        "name": "Harbour, 6am",
+        "description": "A giclée print of the harbour at first light.",
+        "images": ["https://files.stripe.com/links/harbour.jpg"],
+        "metadata": { "edition": "first" },
+        "variants": [
+          {
+            "id": "price_harbour_a3",
+            "product": "prod_harbour",
+            "name": "A3",
+            "sku": "HARBOUR-A3",
+            "amount": 6000,
+            "currency": "usd",
+            "recurring": null,
+            "stock": 3,
+            "available": true
+          },
+          {
+            "id": "price_harbour_custom",
+            "product": "prod_harbour",
+            "name": "Pay what you like",
+            "sku": null,
+            "amount": null,
+            "currency": "usd",
+            "recurring": null,
+            "stock": null,
+            "available": false
+          }
+        ]
+      }
+    ],
+    "total": 2,
+    "next": null
+  }
+}

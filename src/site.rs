@@ -1,25 +1,28 @@
 #[cfg(feature = "json-schema")]
 use crate::json_schema;
 use crate::{
+    archival_global::ArchivalView,
     check_compatibility,
     constants::MANIFEST_FILE_NAME,
     liquid_parser::{self, PARTIAL_FILE_NAME_RE},
-    manifest::Manifest,
+    manifest::{Manifest, ManifestField},
     object::{Object, ObjectEntry, Renderable, RenderedObject, RenderedObjectMap},
     object_definition::{ObjectDefinition, ObjectDefinitions},
     page::{
-        build_context, ContextDep, ContextReads, ContextSignatures, Page, RenderGlobals,
+        build_context, signature, ContextDep, ContextReads, ContextSignatures, Page, RenderGlobals,
         SharedContext, TemplateType,
     },
+    payments::PaymentsSnapshot,
     read_toml::read_toml,
     scripts::{self, ScriptCollision, ScriptErrors, ScriptFailure, ScriptKind},
     sitemap::{self, ROBOTS_FILE_NAME, SITEMAP_FILE_NAME},
-    social::{SocialSnapshot, ARCHIVAL_GLOBAL},
+    social::SocialSnapshot,
     tags::layout,
     util::path_to_slash,
     ArchivalError, BuildOptions, FieldConfig, FileSystemAPI, ObjectMap,
 };
 use anyhow::Result;
+use liquid::ValueView;
 use seahash::SeaHasher;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -299,6 +302,10 @@ pub struct Site {
     social: RwLock<Option<Arc<SocialSnapshot>>>,
     #[serde(skip)]
     social_signature: AtomicU64,
+    #[serde(skip)]
+    payments: RwLock<Option<Arc<PaymentsSnapshot>>>,
+    #[serde(skip)]
+    payments_signature: AtomicU64,
 }
 
 // Site is shared across threads (e.g. the dev server); keep it Send + Sync
@@ -399,6 +406,8 @@ impl Site {
             render_cache: RwLock::new(HashMap::new()),
             social: RwLock::new(None),
             social_signature: AtomicU64::new(0),
+            payments: RwLock::new(None),
+            payments_signature: AtomicU64::new(0),
         })
     }
 
@@ -488,12 +497,9 @@ impl Site {
         // Include cache generation to ensure build_id changes after invalidation
         let generation = self.cache_generation.load(atomic::Ordering::Relaxed);
         hasher.write(&generation.to_ne_bytes());
-        hasher.write(
-            &self
-                .social_signature
-                .load(atomic::Ordering::Relaxed)
-                .to_ne_bytes(),
-        );
+        for snapshot in [&self.social_signature, &self.payments_signature] {
+            hasher.write(&snapshot.load(atomic::Ordering::Relaxed).to_ne_bytes());
+        }
         hasher.finish()
     }
 
@@ -508,15 +514,51 @@ impl Site {
             .store(signature, atomic::Ordering::Relaxed);
     }
 
-    /// Whether any page the last build rendered read the `archival` global.
-    pub fn reads_social(&self) -> bool {
-        self.render_cache.read().unwrap().values().any(|record| {
-            record.deps.iter().any(|(dep, _)| match dep {
-                ContextDep::Key(key) => key == ARCHIVAL_GLOBAL,
-                ContextDep::Everything => true,
-                ContextDep::Object(_) => false,
-            })
-        })
+    /// The payments snapshot the next build renders under `archival.payments`;
+    /// `None` renders it as a site with no payment account.
+    pub fn set_payments(&self, payments: Option<PaymentsSnapshot>) {
+        let signature = payments.as_ref().map_or(0, |payments| {
+            hash_source(&serde_json::to_string(payments).unwrap_or_default())
+        });
+        *self.payments.write().unwrap() = payments.map(Arc::new);
+        self.payments_signature
+            .store(signature, atomic::Ordering::Relaxed);
+    }
+
+    /// The hash archival.toml records for the `archival` global, or `None` when no
+    /// snapshot was given to render under it.
+    pub fn archival_global_hash(&self) -> Option<String> {
+        let social = self.social.read().unwrap().clone();
+        let payments = self.payments.read().unwrap().clone();
+        if social.is_none() && payments.is_none() {
+            return None;
+        }
+        let mut global = ArchivalView::new(social.as_deref(), payments.as_deref()).to_value();
+        // A new snapshot is stamped even when nothing in it changed.
+        if let liquid::model::Value::Object(global) = &mut global {
+            global.remove("generated_at");
+        }
+        Some(format!("{:016x}", signature(&global)))
+    }
+
+    /// Records [`Self::archival_global_hash`] in archival.toml, leaving the rest of the
+    /// file as it was. Returns whether the recorded hash changed.
+    pub fn write_archival_global_hash<T: FileSystemAPI>(&mut self, fs: &mut T) -> Result<bool> {
+        let Some(hash) = self.archival_global_hash() else {
+            return Ok(false);
+        };
+        if self.manifest.archival_global_hash.as_deref() == Some(hash.as_str()) {
+            return Ok(false);
+        }
+        let manifest_path = Manifest::path_in(Path::new(""), fs)?;
+        let mut document: toml_edit::DocumentMut = fs
+            .read_to_string(&manifest_path)?
+            .unwrap_or_default()
+            .parse()?;
+        document[ManifestField::ArchivalGlobalHash.field_name()] = toml_edit::value(&hash);
+        fs.write_str(manifest_path, document.to_string())?;
+        self.manifest.archival_global_hash = Some(hash);
+        Ok(true)
     }
 
     pub fn schema_prefix(&self) -> String {
@@ -1023,9 +1065,11 @@ impl Site {
         } = &self.manifest;
 
         let social = self.social.read().unwrap().clone();
+        let payments = self.payments.read().unwrap().clone();
         let globals = RenderGlobals {
             site_url: self.manifest.absolute_site_url().unwrap_or_default(),
             social: social.as_deref(),
+            payments: payments.as_deref(),
         };
 
         let mut plan = WritePlan::default();
@@ -2234,7 +2278,6 @@ mod incremental_render {
         let archival = Archival::new(fs).unwrap();
         archival.build(BuildOptions::default()).unwrap();
         assert!(built(&archival, "dist/articles/article-0.html").contains("0 likes"));
-        assert!(archival.site.reads_social());
         assert!(reads_archival(&archival, "dist/articles/article-0.html"));
         assert!(!reads_archival(&archival, "dist/about.html"));
 
@@ -2249,11 +2292,93 @@ mod incremental_render {
     }
 
     #[test]
-    fn a_site_that_never_reads_archival_reports_so() {
-        let archival = Archival::new(site()).unwrap();
-        archival.site.set_social(Some(likes(3)));
+    fn the_archival_global_hash_is_recorded_in_the_manifest() {
+        let mut fs = site();
+        fs.write_str(
+            "archival.toml",
+            "# keep me\nupload_prefix = \"\"\n\n[metadata]\nsource = \"tests\"\n".to_string(),
+        )
+        .unwrap();
+        let mut site = super::Site::load(&fs, None).unwrap();
+        assert_eq!(site.archival_global_hash(), None);
+        assert!(!site.write_archival_global_hash(&mut fs).unwrap());
+
+        site.set_social(Some(likes(3)));
+        let hash = site.archival_global_hash().unwrap();
+        assert!(site.write_archival_global_hash(&mut fs).unwrap());
+        let manifest = fs.read_to_string("archival.toml").unwrap().unwrap();
+        assert_eq!(
+            manifest,
+            format!(
+                "# keep me\nupload_prefix = \"\"\narchival_global_hash = \"{hash}\"\n\n\
+                 [metadata]\nsource = \"tests\"\n"
+            )
+        );
+        assert_eq!(
+            super::Site::load(&fs, None)
+                .unwrap()
+                .manifest
+                .archival_global_hash,
+            Some(hash.clone())
+        );
+        assert!(!site.write_archival_global_hash(&mut fs).unwrap());
+
+        let mut restamped = likes(3);
+        restamped.generated_at = Some("2026-11-14T00:00:00Z".to_string());
+        site.set_social(Some(restamped));
+        assert_eq!(site.archival_global_hash(), Some(hash.clone()));
+
+        site.set_social(Some(likes(4)));
+        assert_ne!(site.archival_global_hash(), Some(hash));
+        assert!(site.write_archival_global_hash(&mut fs).unwrap());
+    }
+
+    fn catalog(amount: u64) -> crate::payments::PaymentsSnapshot {
+        crate::payments::PaymentsSnapshot::from_json(&format!(
+            r#"{{"catalog": {{"items": [{{"id": "prod_a", "name": "Print", "variants": [
+                {{"id": "price_a", "amount": {amount}, "currency": "usd"}}
+            ]}}]}}}}"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_new_payments_snapshot_reaches_the_pages_that_read_it() {
+        let mut fs = site();
+        fs.write_str(
+            "pages/shop.liquid",
+            "{{ archival.payments.variants[\"price_a\"].amount }}\n".to_string(),
+        )
+        .unwrap();
+        let archival = Archival::new(fs).unwrap();
+        archival.site.set_payments(Some(catalog(1200)));
         archival.build(BuildOptions::default()).unwrap();
-        assert!(!archival.site.reads_social());
+        assert_eq!(built(&archival, "dist/shop.html").trim(), "1200");
+        assert!(reads_archival(&archival, "dist/shop.html"));
+
+        archival.site.set_payments(Some(catalog(1500)));
+        archival.build(BuildOptions::default()).unwrap();
+        assert_eq!(built(&archival, "dist/shop.html").trim(), "1500");
+    }
+
+    #[test]
+    fn the_archival_global_hash_covers_payments() {
+        let site = super::Site::load(&site(), None).unwrap();
+        site.set_payments(Some(catalog(1200)));
+        let hash = site.archival_global_hash().unwrap();
+        site.set_payments(Some(catalog(1500)));
+        assert_ne!(site.archival_global_hash(), Some(hash.clone()));
+        site.set_payments(Some(catalog(1200)));
+        site.set_social(Some(likes(3)));
+        assert_ne!(site.archival_global_hash(), Some(hash));
+
+        site.set_social(None);
+        let disconnected =
+            crate::payments::PaymentsSnapshot::from_json(r#"{"account": null}"#).unwrap();
+        site.set_payments(Some(disconnected));
+        let empty = site.archival_global_hash().unwrap();
+        site.set_payments(Some(catalog(1200)));
+        assert_ne!(site.archival_global_hash(), Some(empty));
     }
 }
 

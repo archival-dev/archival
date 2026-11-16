@@ -1,4 +1,5 @@
 mod archival_error;
+mod archival_global;
 #[cfg(test)]
 mod build_id_tests;
 mod definition_comments;
@@ -20,6 +21,7 @@ mod lsp;
 mod named_lookup;
 mod object_definition;
 mod page;
+pub mod payments;
 mod read_toml;
 mod reserved_fields;
 #[cfg(test)]

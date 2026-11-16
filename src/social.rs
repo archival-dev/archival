@@ -10,14 +10,11 @@
 //! empty answer, which is also what a template reads for a path nothing has
 //! interacted with.
 
-use crate::liquid_kstring::KStringCow;
-use liquid::{ObjectView, ValueView};
+pub use crate::archival_global::ARCHIVAL_GLOBAL;
+use crate::archival_global::{liquid_object, liquid_value, ArchivalView};
 use liquid_core::Value;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, fmt};
-
-/// The global the snapshot renders under.
-pub const ARCHIVAL_GLOBAL: &str = "archival";
+use std::collections::BTreeMap;
 
 macro_rules! carrier_type {
     ($(#[$meta:meta])* pub struct $name:ident { $($body:tt)* }) => {
@@ -355,186 +352,60 @@ impl SocialSnapshot {
     }
 }
 
-fn liquid_value(value: &impl Serialize) -> Value {
-    liquid::model::to_value(value).expect("social snapshots are plain data")
-}
-
-fn liquid_object(value: &impl Serialize) -> liquid::Object {
-    match liquid_value(value) {
-        Value::Object(object) => object,
-        _ => liquid::Object::new(),
-    }
-}
-
-/// An object in the `archival` global. Keys resolve to a child view, then to a
-/// plain value, then to `fallback`, which is how an unknown path reads as the
-/// carrier's empty answer instead of nil.
-#[derive(Debug, Default)]
-pub(crate) struct SocialView {
-    children: Vec<(&'static str, SocialView)>,
-    fields: liquid::Object,
-    fallback: Option<Value>,
-}
-
-impl SocialView {
-    pub(crate) fn new(snapshot: Option<&SocialSnapshot>) -> Self {
-        let empty = SocialSnapshot::default();
-        let snapshot = snapshot.unwrap_or(&empty);
-        let keyed = |entries: liquid::Object, empty: Value| SocialView {
-            fields: entries,
-            fallback: Some(empty),
-            ..Default::default()
+/// The snapshot's part of the `archival` global. A path nothing has reached reads
+/// as the carrier's empty answer for it.
+pub(crate) fn view(snapshot: Option<&SocialSnapshot>) -> ArchivalView {
+    let empty = SocialSnapshot::default();
+    let snapshot = snapshot.unwrap_or(&empty);
+    let network = |mut fields: liquid::Object, key: &'static str, empty: Value| {
+        let entries = match fields.remove(key) {
+            Some(Value::Object(entries)) => entries,
+            _ => liquid::Object::new(),
         };
-        let network = |mut fields: liquid::Object, key: &'static str, empty: Value| {
-            let entries = match fields.remove(key) {
-                Some(Value::Object(entries)) => entries,
-                _ => liquid::Object::new(),
-            };
-            SocialView {
-                children: vec![(key, keyed(entries, empty))],
-                fields,
-                fallback: None,
-            }
-        };
-        let mut fields = liquid::Object::new();
-        fields.insert("generated_at".into(), liquid_value(&snapshot.generated_at));
-        SocialView {
-            children: vec![
-                (
-                    "activitypub",
-                    network(
-                        liquid_object(&snapshot.activitypub),
-                        "posts",
-                        liquid_value(&ActivityPubPost::default()),
-                    ),
-                ),
-                (
-                    "atproto",
-                    network(
-                        liquid_object(&snapshot.atproto),
-                        "posts",
-                        liquid_value(&AtprotoPost::default()),
-                    ),
-                ),
-                (
-                    "webmentions",
-                    network(
-                        liquid_object(&snapshot.webmentions),
-                        "pages",
-                        liquid_value(&WebmentionPage::default()),
-                    ),
-                ),
-                (
-                    "interactions",
-                    keyed(
-                        liquid_object(&snapshot.interactions),
-                        liquid_value(&PostInteractions::default()),
-                    ),
-                ),
-            ],
+        ArchivalView {
+            children: vec![(key, ArchivalView::keyed(entries, empty))],
             fields,
             fallback: None,
         }
-    }
-
-    fn child(&self, index: &str) -> Option<&SocialView> {
-        self.children
-            .iter()
-            .find(|(key, _)| *key == index)
-            .map(|(_, view)| view)
-    }
-
-    fn materialize(&self) -> liquid::Object {
-        let mut object = self.fields.clone();
-        for (key, child) in &self.children {
-            object.insert((*key).into(), Value::Object(child.materialize()));
-        }
-        object
-    }
-}
-
-impl fmt::Display for SocialView {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        for (k, v) in ObjectView::iter(self) {
-            write!(f, "{}: {} ", k, v.render())?;
-        }
-        Ok(())
-    }
-}
-
-impl ValueView for SocialView {
-    fn as_debug(&self) -> &dyn fmt::Debug {
-        self
-    }
-    fn render(&self) -> liquid::model::DisplayCow<'_> {
-        liquid::model::DisplayCow::Owned(Box::new(self))
-    }
-    fn source(&self) -> liquid::model::DisplayCow<'_> {
-        liquid::model::DisplayCow::Owned(Box::new(self))
-    }
-    fn type_name(&self) -> &'static str {
-        "object"
-    }
-    fn query_state(&self, state: liquid::model::State) -> bool {
-        match state {
-            liquid::model::State::Truthy => true,
-            liquid::model::State::DefaultValue
-            | liquid::model::State::Empty
-            | liquid::model::State::Blank => ObjectView::size(self) == 0,
-        }
-    }
-    fn to_kstr(&self) -> KStringCow<'_> {
-        KStringCow::from_string(self.to_string())
-    }
-    fn to_value(&self) -> Value {
-        Value::Object(self.materialize())
-    }
-    fn as_object(&self) -> Option<&dyn ObjectView> {
-        Some(self)
-    }
-}
-
-impl ObjectView for SocialView {
-    fn as_value(&self) -> &dyn ValueView {
-        self
-    }
-    fn size(&self) -> i64 {
-        (self.children.len() + self.fields.len()) as i64
-    }
-    fn keys<'k>(&'k self) -> Box<dyn Iterator<Item = KStringCow<'k>> + 'k> {
-        Box::new(
-            self.children
-                .iter()
-                .map(|(key, _)| KStringCow::from_static(key))
-                .chain(self.fields.keys().map(|k| k.as_ref().into())),
-        )
-    }
-    fn values<'k>(&'k self) -> Box<dyn Iterator<Item = &'k dyn ValueView> + 'k> {
-        Box::new(ObjectView::iter(self).map(|(_, v)| v))
-    }
-    fn iter<'k>(&'k self) -> Box<dyn Iterator<Item = (KStringCow<'k>, &'k dyn ValueView)> + 'k> {
-        Box::new(
-            self.children
-                .iter()
-                .map(|(key, view)| (KStringCow::from_static(key), view as &dyn ValueView))
-                .chain(
-                    self.fields
-                        .iter()
-                        .map(|(k, v)| (k.as_ref().into(), v.as_view())),
+    };
+    let mut fields = liquid::Object::new();
+    fields.insert("generated_at".into(), liquid_value(&snapshot.generated_at));
+    ArchivalView {
+        children: vec![
+            (
+                "activitypub",
+                network(
+                    liquid_object(&snapshot.activitypub),
+                    "posts",
+                    liquid_value(&ActivityPubPost::default()),
                 ),
-        )
-    }
-    fn contains_key(&self, index: &str) -> bool {
-        self.child(index).is_some() || self.fields.contains_key(index)
-    }
-    fn get<'s>(&'s self, index: &str) -> Option<&'s dyn ValueView> {
-        if let Some(child) = self.child(index) {
-            return Some(child);
-        }
-        self.fields
-            .get(index)
-            .or(self.fallback.as_ref())
-            .map(|v| v.as_view())
+            ),
+            (
+                "atproto",
+                network(
+                    liquid_object(&snapshot.atproto),
+                    "posts",
+                    liquid_value(&AtprotoPost::default()),
+                ),
+            ),
+            (
+                "webmentions",
+                network(
+                    liquid_object(&snapshot.webmentions),
+                    "pages",
+                    liquid_value(&WebmentionPage::default()),
+                ),
+            ),
+            (
+                "interactions",
+                ArchivalView::keyed(
+                    liquid_object(&snapshot.interactions),
+                    liquid_value(&PostInteractions::default()),
+                ),
+            ),
+        ],
+        fields,
+        fallback: None,
     }
 }
 

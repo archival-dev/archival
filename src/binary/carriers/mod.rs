@@ -37,16 +37,24 @@ use tracing::{debug, warn};
 use walkdir::WalkDir;
 
 const DATABASE_FILE_NAME: &str = "site.sqlite";
-const PAYMENTS_ENV: &str = "ARCHIVAL_PAYMENTS";
+use super::PAYMENTS_FILE_ENV as PAYMENTS_ENV;
 
 /// Whether this run was pointed at local payments, which the sidecar reads.
 fn names_payments() -> bool {
     std::env::var_os(PAYMENTS_ENV).is_some_and(|file| !file.is_empty())
 }
 
-/// Whether this run has a payment account: the payments file it names is there.
+/// Whether this run has a payment account: the payments file it names is there
+/// and does not say `"account": null`. A file that does not parse counts, so
+/// that the sidecar answers the cart with why.
 pub(crate) fn has_payment_account() -> bool {
-    std::env::var_os(PAYMENTS_ENV).is_some_and(|file| Path::new(&file).is_file())
+    std::env::var_os(PAYMENTS_ENV)
+        .filter(|file| Path::new(file).is_file())
+        .and_then(|file| std::fs::read_to_string(file).ok())
+        .is_some_and(|json| {
+            crate::payments::PaymentsSnapshot::from_json(&json)
+                .map_or(true, |payments| payments.account.is_some())
+        })
 }
 
 /// Tracks what each watched carrier file last contained.

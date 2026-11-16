@@ -1,0 +1,11 @@
+{
+  "catalog": {
+    "items": [
+      {
+        "id": "harbour",
+        "name": "Harbour, 6am",
+        "variants": [{ "id": "harbour-a3", "currency": "usd" }]
+      }
+    ]
+  }
+}
