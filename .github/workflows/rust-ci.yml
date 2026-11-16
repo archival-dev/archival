@@ -73,6 +73,8 @@ jobs:
   test:
     name: Tests
     env:
+      # sccache expands cargo's @argfile, so its rustc command line passes Windows' limit (os error 206).
+      RUSTC_WRAPPER: ${{ matrix.os != 'windows-2022' && 'sccache' || '' }}
       SCCACHE_BUCKET: ${{ vars.SCCACHE_BUCKET }}
       SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
       AWS_ACCESS_KEY_ID: ${{ vars.AWS_ACCESS_KEY_ID }}
@@ -229,6 +231,8 @@ jobs:
   release:
     name: Release
     env:
+      # sccache expands cargo's @argfile, so its rustc command line passes Windows' limit (os error 206).
+      RUSTC_WRAPPER: ${{ matrix.os != 'windows-2022' && 'sccache' || '' }}
       SCCACHE_BUCKET: ${{ vars.SCCACHE_BUCKET }}
       SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
       AWS_ACCESS_KEY_ID: ${{ vars.AWS_ACCESS_KEY_ID }}
