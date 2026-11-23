@@ -274,10 +274,19 @@ actually open.
 
 ## Scope
 
-Static content sites: marketing pages, portfolios, brochures, landing pages,
-event and menu pages.
+Content sites: marketing pages, portfolios, brochures, landing pages, event and
+menu pages.
 
-Carriers — Archival's serverless functions — are not available here and cannot
-be previewed; a preview whose source contains `carriers/` is refused. If someone
-needs forms that submit, logins, or a database, say that plainly and point them
-at <https://archival.dev/docs/carriers>.
+Carriers — Archival's serverless functions — are how a site gets forms that
+submit, logins, or stored data, and a preview runs them. Read
+<https://archival.dev/docs/carriers> before writing one, put each in
+`carriers/<name>/`, and the publish deploys it with the pages, up to five. In
+code mode `archival run .` runs them locally too.
+
+A carrier in a preview reaches nothing real: the email it sends is shown to the
+visitor instead of delivered, its payments are simulated, its requests to other
+hosts are answered without being sent, and `site.sql` is unavailable until the
+site is claimed. Say so when you hand over a preview with one. Previews share an
+allowance of carrier deploys and of carrier requests, so a publish or a carrier
+can answer 429; publish again later, or without `carriers/` to show the pages
+alone.
