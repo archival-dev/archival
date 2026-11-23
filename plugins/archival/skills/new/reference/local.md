@@ -173,12 +173,13 @@ Never hand-edit them once the folder is linked.
    API=https://api.archival.dev
    curl -sS -X POST "$API/previews/self-serve/pair/start" \
      -H 'Content-Type: application/json' -d '{"slug":"<site name>"}'
-   # -> {"code":"K7QM…","verifyUrl":"https://archival.dev/link?c=K7QM…","expiresIn":600}
+   # -> {"code":"K7QM…","verifyUrl":"https://editor.archival.dev/link?c=K7QM…","expiresIn":600}
    ```
 
    Send one message: the `verifyUrl`, the code, and a request to check that the
-   code on the page matches before approving. Then stop and wait. When they
-   say they have approved:
+   code on the page matches before approving. The page asks them to sign in to
+   Archival; creating a free account there is enough. Then stop and wait. When
+   they say they have approved:
 
    ```bash
    mkdir -p "$HOME/.archival" && (umask 077; curl -sS -o "$HOME/.archival/preview.json" \

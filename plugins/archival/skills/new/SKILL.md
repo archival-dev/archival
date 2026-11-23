@@ -98,9 +98,10 @@ and skip to step 2. Otherwise:
    a code.
 2. Send **one** message: the link, the code, ask them to check the code matches
    on the page before approving, and — in the same message, for a new site —
-   the questions from step 3. That check is what stops a link someone else sent them from being
-   approved by mistake, and folding the questions in means the wait costs
-   nothing.
+   the questions from step 3. Tell them the page asks them to sign in to
+   Archival, and that creating a free account there is enough. That check is
+   what stops a link someone else sent them from being approved by mistake, and
+   folding the questions in means the wait costs nothing.
 3. Then stop and let them reply. Call `archival_await_approval` when they come
    back, or once or twice if you have something to say meanwhile.
 
@@ -110,6 +111,10 @@ building: the link expires in ten minutes, and a link that lapses unwatched
 while you write a site against a session that was never approved costs a whole
 round trip and leaves you with nothing to show. If it has expired, mint another
 and say so in one line. Never invent a session or a preview name.
+
+A 429 when starting a session, or one the person reports from the approval
+page, means their account has used up its daily preview allowance. Say so
+plainly and that it works again tomorrow; a new link will not get around it.
 
 The session lasts two hours once approved; the `expiresAt` the tools return is
 the session's. The preview itself stays up for 30 days after its last publish,

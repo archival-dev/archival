@@ -27,10 +27,11 @@ what you want:
 is installed and nothing is built locally: the site is written straight into a
 preview through the MCP tools, and Archival builds it on its side with a pinned
 `archival` binary. A person approves the session in a browser — the agent asks
-for a link and a code, you open the link, clear a challenge, and approve — and
-that is the only gate, which is why no credential has to be pasted into the
-session. Starting from <https://archival.dev> does the same check up front and
-hands you a ready-to-paste prompt with the session already approved.
+for a link and a code, you open the link, sign in to Archival (a free account
+is enough), and approve — and that is the only gate, which is why no credential
+has to be pasted into the session. Starting from <https://archival.dev> has you
+sign in up front and hands you a ready-to-paste prompt with the session already
+approved.
 
 **In a folder** (Claude Code) the skill notices it has a shell and works there.
 `bin/site-info.sh` tells it whether the folder already holds an Archival site;

@@ -36,7 +36,7 @@ Skip this if one arrived with the request.
 # 1. ask for a code
 curl -sS -X POST "$API/previews/self-serve/pair/start" \
   -H 'Content-Type: application/json' -d '{"slug":"blue fig bakery"}'
-# -> { "code": "K7QM…", "verifyUrl": "https://archival.dev/link?c=K7QM…", "expiresIn": 600 }
+# -> { "code": "K7QM…", "verifyUrl": "https://editor.archival.dev/link?c=K7QM…", "expiresIn": 600 }
 
 # 2. show the person the URL and the code, then poll until this stops being 204
 (umask 077; curl -sS -o "$HOME/.archival/preview.json" -w '%{http_code}\n' \
@@ -52,9 +52,9 @@ sed -n 's/.*"name":"\([^"]*\)".*/\1/p' "$HOME/.archival/preview.json"
 sed -n 's/.*"uploadPrefix":"\([^"]*\)".*/\1/p' "$HOME/.archival/preview.json"
 ```
 
-The code is single-use, expires in ten minutes, and only a person clearing a
-challenge in a browser can approve it. The `slug` is optional and names the
-preview's subdomain.
+The code is single-use, expires in ten minutes, and only a person signed in to
+Archival in a browser can approve it; creating a free account there is enough.
+The `slug` is optional and names the preview's subdomain.
 
 ## 1. Check what you have
 
@@ -212,6 +212,9 @@ A preview with no traffic is deleted after 30 days.
 
 429 is worth retrying after a wait, and 422 after fixing what it named. The rest
 are mistakes in the request: fix the path, the order, or get a fresh link.
+
+A 429 the person sees when approving the code is different: their account has
+used up its daily preview allowance, and it works again tomorrow.
 
 ## What to tell the person
 
