@@ -280,7 +280,7 @@ menu pages.
 Carriers — Archival's serverless functions — are how a site gets forms that
 submit, logins, or stored data, and a preview runs them. Read
 <https://archival.dev/docs/carriers> before writing one, put each in
-`carriers/<name>/`, and the publish deploys it with the pages, up to five. In
+`carriers/<name>/`, and the publish deploys it with the pages, up to two. In
 code mode `archival run .` runs them locally too.
 
 A carrier in a preview reaches nothing real: the email it sends is shown to the

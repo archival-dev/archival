@@ -107,7 +107,7 @@ curl -sS -f -X DELETE -H "$AUTH" "$API/previews/self-serve/file/source/old-page.
 
 Paths must be relative; absolute paths, `..`, and empty segments are rejected.
 Each directory under `carriers/` is deployed as a carrier when the source is
-built, up to five.
+built, up to two.
 
 You do not need to set `Content-Type`. What a file is served as is decided from
 its extension, so `curl --data-binary` (which would otherwise send
@@ -203,7 +203,7 @@ A preview with no traffic is deleted after 30 days.
 
 | Status | Meaning                                                            |
 | ------ | ------------------------------------------------------------------ |
-| 400    | Building with no source uploaded, or with more than five carriers. |
+| 400    | Building with no source uploaded, or with more than two carriers. |
 | 401    | Missing, malformed, expired, or unknown token. Get a fresh link.    |
 | 403    | Path rejected (absolute, or containing `..` or an empty segment).  |
 | 413    | File or preview over the size limit.                               |
