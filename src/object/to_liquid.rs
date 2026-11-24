@@ -96,11 +96,10 @@ impl FieldValue {
 
 impl File {
     pub fn to_liquid(&self, field_config: &FieldConfig) -> liquid::model::Value {
-        let mut m = liquid::model::Object::new();
-        for (k, v) in self.clone().into_map(Some(field_config)) {
-            m.insert(k.into(), liquid::model::Value::scalar(v));
-        }
-        liquid_core::Value::Object(m)
+        liquid_core::Value::Custom(std::sync::Arc::new(crate::object::Renderable::rendered(
+            self.clone(),
+            field_config,
+        )))
     }
 }
 

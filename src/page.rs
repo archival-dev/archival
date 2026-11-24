@@ -174,6 +174,7 @@ impl ContextSignatures {
 // Lengths are written as u64 so a signature agrees between wasm32 and 64-bit builds.
 fn hash_liquid(value: &Value, hasher: &mut seahash::SeaHasher) {
     match value {
+        Value::Custom(custom) => hash_liquid(&custom.to_value(), hasher),
         Value::Nil => hasher.write_u8(0),
         Value::State(state) => {
             hasher.write_u8(1);

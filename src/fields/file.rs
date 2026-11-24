@@ -1,4 +1,4 @@
-use crate::liquid_kstring::KStringCow;
+use crate::liquid_kstring::{KString, KStringCow};
 use crate::{fields::FieldConfig, object::Renderable};
 use liquid::{model, ObjectView, ValueView};
 use mime_guess::{mime::FromStrError, Mime, MimeGuess};
@@ -93,9 +93,7 @@ impl ValueView for DisplayType {
     }
 }
 
-#[derive(
-    Debug, ObjectView, ValueView, Deserialize, Serialize, Clone, PartialEq, PartialOrd, Hash,
-)]
+#[derive(Debug, ObjectView, Deserialize, Serialize, Clone, PartialEq, PartialOrd, Hash)]
 #[cfg_attr(feature = "typescript", derive(typescript_type_def::TypeDef))]
 pub struct RenderedFile {
     pub display_type: DisplayType,
@@ -106,6 +104,55 @@ pub struct RenderedFile {
     pub description: Option<String>,
     pub url: String,
 }
+
+/// A file is its url everywhere a template asks for one value - `{{ photo }}`,
+/// a string filter, a comparison - while `{{ photo.url }}` and every other key
+/// keep working through `as_object`.
+///
+/// `to_value` stays an object, which is what json consumers and the carrier
+/// payload read; `CustomValue` is what carries the rendering across the points
+/// liquid has to own a value.
+impl ValueView for RenderedFile {
+    fn as_debug(&self) -> &dyn std::fmt::Debug {
+        self
+    }
+    fn render(&self) -> model::DisplayCow<'_> {
+        model::DisplayCow::Borrowed(&self.url)
+    }
+    fn source(&self) -> model::DisplayCow<'_> {
+        model::DisplayCow::Borrowed(&self.url)
+    }
+    fn type_name(&self) -> &'static str {
+        "object"
+    }
+    fn query_state(&self, state: model::State) -> bool {
+        match state {
+            model::State::Truthy => true,
+            model::State::DefaultValue | model::State::Empty | model::State::Blank => {
+                self.url.is_empty()
+            }
+        }
+    }
+    fn to_kstr(&self) -> KStringCow<'_> {
+        KStringCow::from_ref(&self.url)
+    }
+    fn as_scalar(&self) -> Option<model::ScalarCow<'_>> {
+        Some(model::ScalarCow::new(self.url.as_str()))
+    }
+    fn to_value(&self) -> liquid_core::Value {
+        liquid_core::Value::Object(
+            ObjectView::iter(self)
+                .map(|(k, v)| (KString::from_string(k.into_string()), v.to_value()))
+                .collect(),
+        )
+    }
+    fn as_object(&self) -> Option<&dyn ObjectView> {
+        Some(self)
+    }
+}
+
+impl liquid_core::model::CustomValue for RenderedFile {}
+
 impl RenderedFile {
     pub fn from_file(file: File, field_config: &FieldConfig) -> Self {
         let url = file.url(field_config);
