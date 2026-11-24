@@ -25,6 +25,7 @@ pub enum ArchivalEvent {
     EditOrder(EditOrderEvent),
     AddChild(AddChildEvent),
     RemoveChild(RemoveChildEvent),
+    MoveChild(MoveChildEvent),
 }
 
 impl ArchivalEvent {
@@ -37,6 +38,7 @@ impl ArchivalEvent {
             ArchivalEvent::EditOrder(evt) => &evt.object,
             ArchivalEvent::AddChild(evt) => &evt.object,
             ArchivalEvent::RemoveChild(evt) => &evt.object,
+            ArchivalEvent::MoveChild(evt) => &evt.object,
             ArchivalEvent::RenameObject(evt) => &evt.object,
         }
     }
@@ -52,6 +54,7 @@ impl ArchivalEvent {
             ArchivalEvent::EditOrder(evt) => &evt.filename,
             ArchivalEvent::AddChild(evt) => &evt.filename,
             ArchivalEvent::RemoveChild(evt) => &evt.filename,
+            ArchivalEvent::MoveChild(evt) => &evt.filename,
             ArchivalEvent::RenameObject(evt) => &evt.to,
         }
     }
@@ -125,6 +128,19 @@ impl Display for ArchivalEvent {
                         .to_string();
                     format!(
                         "Remove {} child from {} '{}'",
+                        indefinite(child_name),
+                        evt.object,
+                        evt.filename
+                    )
+                }
+                ArchivalEvent::MoveChild(evt) => {
+                    let child_name = &evt
+                        .path
+                        .first()
+                        .expect("MoveChild has no object")
+                        .to_string();
+                    format!(
+                        "Move {} child in {} '{}'",
                         indefinite(child_name),
                         evt.object,
                         evt.filename
@@ -243,6 +259,19 @@ pub struct RemoveChildEvent {
     pub object: String,
     pub filename: String,
     pub path: ValuePath,
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Hash)]
+#[cfg_attr(feature = "typescript", derive(TypeDef))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct MoveChildEvent {
+    pub object: String,
+    pub filename: String,
+    /// The child to move, ending in its current index.
+    pub path: ValuePath,
+    /// The index the child ends up at.
+    pub index: u32,
     pub source: Option<String>,
 }
 
@@ -413,6 +442,24 @@ mod content_tests {
                 .append(ValuePath::index(0)),
             source: None,
         });
+        let content = event.content(&archival)?;
+        assert!(!content.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_move_child_content() -> Result<()> {
+        let archival = setup_test_archival()?;
+        let event = ArchivalEvent::MoveChild(MoveChildEvent {
+            object: "post".to_string(),
+            filename: "a-post".to_string(),
+            path: ValuePath::default()
+                .append(ValuePath::key("links"))
+                .append(ValuePath::index(0)),
+            index: 1,
+            source: None,
+        });
+        assert_eq!(event.to_string(), "Move a links child in post 'a-post'");
         let content = event.content(&archival)?;
         assert!(!content.is_empty());
         Ok(())

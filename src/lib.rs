@@ -42,7 +42,7 @@ mod value_path;
 use anyhow::Result;
 use events::{
     AddChildEvent, AddObjectEvent, ArchivalEvent, DeleteObjectEvent, EditFieldEvent,
-    EditOrderEvent, RemoveChildEvent, RenameObjectEvent,
+    EditOrderEvent, MoveChildEvent, RemoveChildEvent, RenameObjectEvent,
 };
 use events::{AddRootObjectEvent, ArchivalEventResponse};
 use manifest::Manifest;
@@ -512,6 +512,7 @@ impl<F: FileSystemAPI + Clone + Debug> Archival<F> {
             ArchivalEvent::EditOrder(event) => self.edit_order(event)?,
             ArchivalEvent::AddChild(event) => self.add_child(event)?,
             ArchivalEvent::RemoveChild(event) => self.remove_child(event)?,
+            ArchivalEvent::MoveChild(event) => self.move_child(event)?,
         };
         if let Some(build_options) = build_options {
             self.build(build_options)?;
@@ -758,6 +759,14 @@ impl<F: FileSystemAPI + Clone + Debug> Archival<F> {
         self.write_object(&event.object, &event.filename, move |existing| {
             let mut path = event.path;
             path.remove_child(existing)?;
+            Ok(existing)
+        })?;
+        Ok(ArchivalEventResponse::None)
+    }
+    fn move_child(&self, event: MoveChildEvent) -> Result<ArchivalEventResponse> {
+        self.write_object(&event.object, &event.filename, move |existing| {
+            let mut path = event.path;
+            path.move_child(existing, event.index as usize)?;
             Ok(existing)
         })?;
         Ok(ArchivalEventResponse::None)
@@ -1376,6 +1385,60 @@ mod lib {
         let rendered_links: Vec<_> = post_html.match_indices("<a href=").collect();
         println!("LINKS: {:?}", rendered_links);
         assert_eq!(rendered_links.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn move_child() -> Result<()> {
+        let mut fs = MemoryFileSystem::default();
+        let zip = include_bytes!("../tests/fixtures/archival-website.zip");
+        unpack_zip(zip.to_vec(), &mut fs)?;
+        let archival = Archival::new(fs)?;
+        let move_link = |from: usize, index: u32| {
+            archival.send_event(
+                ArchivalEvent::MoveChild(MoveChildEvent {
+                    object: "post".to_string(),
+                    filename: "a-post".to_string(),
+                    path: ValuePath::default()
+                        .append(ValuePath::key("links"))
+                        .append(ValuePath::index(from)),
+                    index,
+                    source: None,
+                }),
+                Some(BuildOptions::default()),
+            )
+        };
+        let link_urls = || -> Result<Vec<String>> {
+            let post_html = archival
+                .fs_mutex
+                .with_fs(|fs| {
+                    fs.read_to_string(
+                        archival
+                            .site
+                            .manifest
+                            .build_dir
+                            .join(Path::new("post/a-post.html")),
+                    )
+                })?
+                .unwrap();
+            Ok(post_html
+                .split("<a href=\"")
+                .skip(1)
+                .map(|rest| rest.split('"').next().unwrap().to_string())
+                .collect())
+        };
+        move_link(0, 1)?;
+        assert_eq!(link_urls()?, ["#", "https://archival.dev/contribute"]);
+        let toml = archival.object_file("post", "a-post")?;
+        assert!(toml.find("[[links]]").unwrap() < toml.find("name = \"foo\"").unwrap());
+        assert_eq!(toml.matches("[[links]]").count(), 2);
+
+        assert!(move_link(0, 2).is_err());
+        assert!(move_link(2, 0).is_err());
+        assert_eq!(archival.object_file("post", "a-post")?, toml);
+
+        move_link(1, 0)?;
+        assert_eq!(link_urls()?, ["https://archival.dev/contribute", "#"]);
         Ok(())
     }
 

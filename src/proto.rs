@@ -674,6 +674,9 @@ impl From<archival_proto::ArchivalEvent> for ArchivalEvent {
                 archival_proto::archival_event::Event::RemoveChild(remove_child_event) => {
                     ArchivalEvent::RemoveChild(remove_child_event.into())
                 }
+                archival_proto::archival_event::Event::MoveChild(move_child_event) => {
+                    ArchivalEvent::MoveChild(move_child_event.into())
+                }
             })
             .unwrap_or_else(|| panic!("Invalid archival event proto: missing event field"))
     }
@@ -813,6 +816,24 @@ impl From<archival_proto::RemoveChildEvent> for events::RemoveChildEvent {
         }
     }
 }
+impl From<archival_proto::MoveChildEvent> for events::MoveChildEvent {
+    fn from(value: archival_proto::MoveChildEvent) -> Self {
+        events::MoveChildEvent {
+            object: value.object,
+            filename: value.filename,
+            path: value
+                .path
+                .map(|p| p.into())
+                .unwrap_or_else(ValuePath::empty),
+            index: value.index,
+            source: if value.source.is_empty() {
+                None
+            } else {
+                Some(value.source)
+            },
+        }
+    }
+}
 
 // ArchivalEvent -> proto
 impl From<ArchivalEvent> for archival_proto::ArchivalEvent {
@@ -841,6 +862,9 @@ impl From<ArchivalEvent> for archival_proto::ArchivalEvent {
             }
             ArchivalEvent::RemoveChild(remove_child_event) => {
                 archival_proto::archival_event::Event::RemoveChild(remove_child_event.into())
+            }
+            ArchivalEvent::MoveChild(move_child_event) => {
+                archival_proto::archival_event::Event::MoveChild(move_child_event.into())
             }
         };
         archival_proto::ArchivalEvent { event: Some(event) }
@@ -947,6 +971,17 @@ impl From<events::RemoveChildEvent> for archival_proto::RemoveChildEvent {
         }
     }
 }
+impl From<events::MoveChildEvent> for archival_proto::MoveChildEvent {
+    fn from(value: events::MoveChildEvent) -> Self {
+        archival_proto::MoveChildEvent {
+            object: value.object,
+            filename: value.filename,
+            path: Some(value.path.into()),
+            index: value.index,
+            source: value.source.unwrap_or_default(),
+        }
+    }
+}
 
 #[cfg(test)]
 mod proto_tests {
@@ -987,6 +1022,7 @@ mod proto_tests {
         events::ArchivalEvent::EditOrder(events::EditOrderEvent { object: "object".to_string(), filename: "foo".to_string(), order: Some(12.34), source: None });
         events::ArchivalEvent::AddChild(events::AddChildEvent { object: "parent".to_string(), filename: "parent_file".to_string(), path: object::ValuePath::from_string("children/0"), values: vec![], index: Some(0) });
         events::ArchivalEvent::RemoveChild(events::RemoveChildEvent { object: "parent".to_string(), filename: "parent_file".to_string(), path: object::ValuePath::from_string("children/0"), source: Some("user".to_string()) });
+        events::ArchivalEvent::MoveChild(events::MoveChildEvent { object: "parent".to_string(), filename: "parent_file".to_string(), path: object::ValuePath::from_string("children/0"), index: 2, source: Some("user".to_string()) });
         events::ArchivalEvent::RenameObject(events::RenameObjectEvent { object: "object".to_string(), from: "old_name".to_string(), to: "new_name".to_string() });
     });
     proto_test!(archival_proto::File => fields::File, file_test {

@@ -270,6 +270,14 @@ message RemoveChildEvent {
   string source = 4;
 }
 
+message MoveChildEvent {
+  string object = 1;
+  string filename = 2;
+  ValuePath path = 3;
+  uint32 index = 4;
+  string source = 5;
+}
+
 message ArchivalEvent {
   oneof event {
     RenameObjectEvent rename_object = 1;
@@ -280,5 +288,6 @@ message ArchivalEvent {
     EditOrderEvent edit_order = 6;
     AddChildEvent add_child = 7;
     RemoveChildEvent remove_child = 8;
+    MoveChildEvent move_child = 9;
   }
 }

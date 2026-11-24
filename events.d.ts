@@ -112,6 +112,21 @@ export type RemoveChildEvent = {
     "path": ValuePath;
     "source": (string | null);
 };
+export type MoveChildEvent = {
+    "object": string;
+    "filename": string;
+
+    /**
+     * The child to move, ending in its current index.
+     */
+    "path": ValuePath;
+
+    /**
+     * The index the child ends up at.
+     */
+    "index": U32;
+    "source": (string | null);
+};
 export type ArchivalEvent = ({
     "RenameObject": RenameObjectEvent;
 } | {
@@ -128,4 +143,6 @@ export type ArchivalEvent = ({
     "AddChild": AddChildEvent;
 } | {
     "RemoveChild": RemoveChildEvent;
+} | {
+    "MoveChild": MoveChildEvent;
 });

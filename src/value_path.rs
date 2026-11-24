@@ -505,6 +505,27 @@ impl ValuePath {
             Err(ValuePathError::ChildPathMissingIndex(self.to_string()))
         }
     }
+    pub fn move_child(&mut self, object: &mut Object, index: usize) -> Result<(), ValuePathError> {
+        match self.pop() {
+            Some(ValuePathComponent::Index(from)) => self.modify_children(object, |children| {
+                for i in [from, index] {
+                    if i >= children.len() {
+                        return Err(ValuePathError::IndexOutOfRange(
+                            self.clone().append(ValuePathComponent::Index(i)),
+                            children.len(),
+                        ));
+                    }
+                }
+                let child = children.remove(from);
+                children.insert(index, child);
+                Ok(())
+            })?,
+            Some(component) => Err(ValuePathError::ChildPathMissingIndex(
+                self.clone().append(component).to_string(),
+            )),
+            None => Err(ValuePathError::ChildPathMissingIndex(self.to_string())),
+        }
+    }
     pub fn modify_children<R>(
         &self,
         object: &mut Object,
@@ -804,6 +825,67 @@ pub mod tests {
             .remove_child(&mut obj)
             .unwrap();
         assert_eq!(child_count(&obj), 1);
+    }
+
+    fn child_names(obj: &Object) -> Vec<String> {
+        ValuePath::from_string("children")
+            .get_children(obj)
+            .unwrap()
+            .iter()
+            .map(|child| match &child["name"] {
+                FieldValue::String(name) => name.clone(),
+                other => panic!("not a string: {other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn move_child() {
+        let mut obj = object();
+        ValuePath::from_string("children")
+            .add_child(&mut obj, None, |child| {
+                ValuePath::from_string("name")
+                    .set_in_tree(child, Some(FieldValue::String("NAME THREE!".to_string())))
+            })
+            .unwrap();
+        ValuePath::from_string("children.0")
+            .move_child(&mut obj, 2)
+            .unwrap();
+        assert_eq!(child_names(&obj), ["NAME TWO!", "NAME THREE!", "NAME ONE!"]);
+        ValuePath::from_string("children.1")
+            .move_child(&mut obj, 0)
+            .unwrap();
+        assert_eq!(child_names(&obj), ["NAME THREE!", "NAME TWO!", "NAME ONE!"]);
+        ValuePath::from_string("children.1")
+            .move_child(&mut obj, 1)
+            .unwrap();
+        assert_eq!(child_names(&obj), ["NAME THREE!", "NAME TWO!", "NAME ONE!"]);
+    }
+
+    #[test]
+    fn move_child_past_the_end_is_an_error() {
+        let mut obj = object();
+        let result = ValuePath::from_string("children.2").move_child(&mut obj, 0);
+        assert!(
+            matches!(result, Err(ValuePathError::IndexOutOfRange(ref path, 2)) if path.to_string() == "children.2"),
+            "{result:?}"
+        );
+        let result = ValuePath::from_string("children.0").move_child(&mut obj, 2);
+        assert!(
+            matches!(result, Err(ValuePathError::IndexOutOfRange(ref path, 2)) if path.to_string() == "children.2"),
+            "{result:?}"
+        );
+        assert_eq!(child_names(&obj), ["NAME ONE!", "NAME TWO!"]);
+    }
+
+    #[test]
+    fn move_child_needs_an_index() {
+        let mut obj = object();
+        let result = ValuePath::from_string("children").move_child(&mut obj, 0);
+        assert!(
+            matches!(result, Err(ValuePathError::ChildPathMissingIndex(ref path)) if path == "children"),
+            "{result:?}"
+        );
     }
 
     #[test]
