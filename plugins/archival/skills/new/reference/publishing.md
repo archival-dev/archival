@@ -66,7 +66,7 @@ curl -sS -H "$AUTH" "$API/previews/self-serve/status"
 {
   "name": "blue-fig-bakery-a1b2c3d4",
   "url": "https://editor.archival.dev/preview?n=blue-fig-bakery-a1b2c3d4",
-  "siteUrl": "https://blue-fig-bakery-a1b2c3d4.preview.onarchival.dev",
+  "siteUrl": "https://blue-fig-bakery-a1b2c3d4.archival.nexus",
   "published": false,
   "publishes": 0,
   "publishesRemaining": 20,
@@ -167,7 +167,7 @@ curl -sS -f -X POST -H "$AUTH" "$API/previews/self-serve/build"
 ```json
 {
   "url": "https://editor.archival.dev/preview?n=blue-fig-bakery-a1b2c3d4",
-  "siteUrl": "https://blue-fig-bakery-a1b2c3d4.preview.onarchival.dev",
+  "siteUrl": "https://blue-fig-bakery-a1b2c3d4.archival.nexus",
   "publishes": 1,
   "publishesRemaining": 19
 }
