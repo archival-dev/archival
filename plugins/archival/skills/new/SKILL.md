@@ -283,6 +283,22 @@ submit, logins, or stored data, and a preview runs them. Read
 `carriers/<name>/`, and the publish deploys it with the pages, up to five. In
 code mode `archival run .` runs them locally too.
 
+A site that takes payments - a carrier calling `site.payments`, a template
+reading `archival.payments`, or `[payments]` in `archival_editor.toml` - gets a
+`payments.local.json` at its root, in either mode, so a checkout works under
+`archival run` on any clone of it (`reference/local.md`, D):
+
+```json
+{ "account": { "name": "Local test shop", "currency": "usd" }, "catalog": { "items": [] } }
+```
+
+A checkout item given as `name`, `amount` and `quantity` takes the account's
+currency. One naming a `variant` needs that product and variant in
+`catalog.items`, under the ids the objects hold
+([archival_payments.schema.json](https://archival.dev/schemas/archival_payments.schema.json)
+has the shape). Nothing in the file is secret, and neither a preview nor the
+deployed site reads it.
+
 A carrier in a preview reaches nothing real: the email it sends is shown to the
 visitor instead of delivered, its payments are simulated, its requests to other
 hosts are answered without being sent, and `site.sql` is unavailable until the
