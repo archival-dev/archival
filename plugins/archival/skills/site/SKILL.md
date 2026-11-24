@@ -72,6 +72,11 @@ then the checklist in conventions §11. `archival run . -p 1024` serves the site
 at `http://localhost:1024` with live reload when the person wants to look. Say
 that address is only on this computer.
 
+A site that takes payments runs with its `payments.local.json` named, as
+`local.md` D shows; write one first if it has none (the `new` skill's
+`SKILL.md`, Scope). archival older than 0.27.3 gives carriers no local
+`site.payments`, so install over it (step 1).
+
 ## 5. Media
 
 ```bash

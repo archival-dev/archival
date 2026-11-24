@@ -25,7 +25,9 @@ Three constraints shape every command below:
 ## A. Install or locate archival
 
 `site-info.sh` reports `archival=<path> <version>` or `archival=missing`. Prefer
-a binary already on `PATH`. Otherwise:
+a binary already on `PATH`. Install one when there is none, or when the site
+takes payments and the one on `PATH` is older than 0.27.3, which gives carriers
+no local `site.payments`:
 
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/bin/install-archival.sh" "" "$HOME/.archival/bin"
@@ -92,8 +94,10 @@ than at the end: a schema or template error names the file you just wrote.
    `pages/feed.xml.liquid` when a dated list exists, linked from the layout.
 8. **`archival_editor.toml`**: a `[[<type>.views]]` for every list type and a
    `[[shortcuts]]` for the one or two lists they will add to most.
-9. **Finish**: `archival format . && rm -rf dist && archival build .`, the
-   checklist in conventions §11, then `git add -A && git commit`.
+9. **`payments.local.json`**, for a site that takes payments (`SKILL.md`,
+   Scope), and run it as D shows.
+10. **Finish**: `archival format . && rm -rf dist && archival build .`, the
+    checklist in conventions §11, then `git add -A && git commit`.
 
 A `Session:` in the prompt, or a request to see it live, does not change this
 order. Build locally first; publishing is step F.
@@ -111,6 +115,18 @@ rm -rf dist && archival build .   # before the checklist: a build removes nothin
 `archival run . -p 1024` rebuilds on change and serves `http://localhost:1024`.
 Run it in the background and tell the person that address is theirs alone;
 nothing is public until F. Never edit `dist/`.
+
+A site with a `payments.local.json` runs with it named, carriers on:
+
+```bash
+PORT=1024; ARCHIVAL_PAYMENTS="$PWD/payments.local.json" archival run . -p "$PORT" --site-url "http://localhost:$PORT"
+```
+
+`site.payments`, `archival.payments` and the cart then answer from the file, and
+a checkout opens archival's local checkout page: Pay returns to the
+`successUrl` with `?checkout=<id>`, which `checkout.get` reads as paid, and
+nothing is charged. Without the variable the run reads as a site with no
+payment provider connected and every checkout is refused.
 
 ## E. Media
 
